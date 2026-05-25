@@ -1,8 +1,14 @@
 # claudex
 
-A small CLI that extends the [Claude Code](https://claude.com/claude-code) CLI with extra commands.
+> Supercharge the [Claude Code](https://claude.com/claude-code) CLI.
 
-The first command, `claudex usage`, shows your current Claude plan usage limits right from the terminal — the same data as the in-session `/usage` view, but available as a standalone one-shot command.
+**claudex** is a power-user companion for the `claude` command line — a growing toolkit of extra commands that make your Claude Code workflow faster, slicker, and more fun. Think of it as the "missing extras" pack for Claude Code.
+
+Its first command sets the tone:
+
+**`claudex usage`** — see your *entire* Claude plan budget at a glance, right in the terminal: current session, weekly limits, Sonnet-only, and usage credits, all rendered as crisp colored bars in a single command. No interactive session, no digging through the web app — just `claudex usage` and you're done.
+
+More commands are on the way.
 
 > [!WARNING]
 > **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic. It works by reusing the OAuth token that Claude Code stores locally and calling an **undocumented** Anthropic endpoint with a Claude Code `User-Agent`. That endpoint may change or disappear without notice, and this usage may be against Anthropic's Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
