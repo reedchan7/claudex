@@ -5,7 +5,7 @@ mod commands;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "claudex")]
+#[command(name = "claudex", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
