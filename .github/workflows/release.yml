@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so we can diff against the previous tag
+
+      - name: Build changelog from commit messages
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          {
+            echo "## Changes"
+            echo ""
+            if [ -n "${PREV_TAG}" ]; then
+              echo "Changes since ${PREV_TAG}:"
+              echo ""
+              git log --no-merges --pretty=format:'- %s (%h)' "${PREV_TAG}..${TAG}"
+            else
+              git log --no-merges --pretty=format:'- %s (%h)' "${TAG}"
+            fi
+            echo ""
+          } > CHANGELOG_RELEASE.md
+          echo "----- generated changelog -----"
+          cat CHANGELOG_RELEASE.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG_RELEASE.md
+          draft: false
+          prerelease: false
+
+  upload-assets:
+    name: ${{ matrix.target }}
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set crate version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Replace only the first `^version = ` line (the [package] version).
+          # Dependency versions are nested inside `{ ... }`, so they are untouched.
+          # awk keeps this portable across the Linux/macOS/Windows-bash runners.
+          awk -v ver="$VERSION" \
+            '/^version = / && !done { print "version = \"" ver "\""; done=1; next } { print }' \
+            Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+          grep -m1 '^version = ' Cargo.toml
+
+      - name: Install NASM (Windows, required by aws-lc-sys)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: claudex
+          target: ${{ matrix.target }}
+          archive: claudex-$tag-$target
+          tar: unix
+          zip: windows
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}
