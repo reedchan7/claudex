@@ -45,22 +45,30 @@ jobs:
           prerelease: false
 
   upload-assets:
-    name: ${{ matrix.target }}
+    name: ${{ matrix.name }}
     needs: create-release
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Both macOS targets build on the Apple Silicon runner; x86_64 is
+          # cross-compiled there (verified working) so we don't depend on the
+          # increasingly scarce Intel `macos-13` runners.
           - target: aarch64-apple-darwin
             os: macos-latest
+            name: darwin-arm64
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
+            name: darwin-amd64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            name: linux-amd64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
+            name: linux-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            name: windows-amd64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +94,7 @@ jobs:
         with:
           bin: claudex
           target: ${{ matrix.target }}
-          archive: claudex-$tag-$target
+          archive: claudex-$tag-${{ matrix.name }}
           tar: unix
           zip: windows
           checksum: sha256

@@ -87,20 +87,20 @@ fi
 # Detect OS.
 os="$(uname -s)"
 case "$os" in
-Darwin) os_part="apple-darwin" ;;
-Linux) os_part="unknown-linux-gnu" ;;
+Darwin) os_part="darwin" ;;
+Linux) os_part="linux" ;;
 *) err "unsupported OS: $os (use 'cargo install' or download from the releases page)" ;;
 esac
 
 # Detect architecture.
 arch="$(uname -m)"
 case "$arch" in
-x86_64 | amd64) arch_part="x86_64" ;;
-arm64 | aarch64) arch_part="aarch64" ;;
+x86_64 | amd64) arch_part="amd64" ;;
+arm64 | aarch64) arch_part="arm64" ;;
 *) err "unsupported architecture: $arch" ;;
 esac
 
-target="${arch_part}-${os_part}"
+platform="${os_part}-${arch_part}"
 
 # Resolve the latest release tag via the GitHub API.
 echo "Resolving latest release..."
@@ -108,7 +108,7 @@ tag="$(fetch "https://api.github.com/repos/${REPO}/releases/latest" |
 	grep '"tag_name"' | head -1 | cut -d'"' -f4)"
 [ -n "$tag" ] || err "could not determine the latest release tag"
 
-asset="${BIN}-${tag}-${target}.tar.gz"
+asset="${BIN}-${tag}-${platform}.tar.gz"
 url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
 
 # Download and extract into a temp dir.
