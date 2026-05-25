@@ -73,11 +73,11 @@ Grab the archive for your platform from the [latest release](https://github.com/
 
 | Platform | Asset |
 | --- | --- |
-| macOS (Apple Silicon) | `claudex-<tag>-aarch64-apple-darwin.tar.gz` |
-| macOS (Intel) | `claudex-<tag>-x86_64-apple-darwin.tar.gz` |
-| Linux (x86_64) | `claudex-<tag>-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux (arm64) | `claudex-<tag>-aarch64-unknown-linux-gnu.tar.gz` |
-| Windows (x86_64) | `claudex-<tag>-x86_64-pc-windows-msvc.zip` |
+| macOS (Apple Silicon) | `claudex-<tag>-darwin-arm64.tar.gz` |
+| macOS (Intel) | `claudex-<tag>-darwin-amd64.tar.gz` |
+| Linux (x86_64) | `claudex-<tag>-linux-amd64.tar.gz` |
+| Linux (arm64) | `claudex-<tag>-linux-arm64.tar.gz` |
+| Windows (x86_64) | `claudex-<tag>-windows-amd64.zip` |
 
 ### Build from source
 
