@@ -19,17 +19,17 @@ More commands are on the way.
 $ claudex usage
 Current session
 █████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 34% used
-Resets 2:30pm (Asia/Shanghai)
+Resets 2:30pm (Asia/Shanghai), 2h 30m left
 
 Current week (all models)
 ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 6% used
-Resets May 30 at 3am (Asia/Shanghai)
+Resets May 30 at 3am (Asia/Shanghai), 4d 11h left
 
 Current week (Sonnet only)
 ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 3% used
-Resets May 30 at 3am (Asia/Shanghai)
+Resets May 30 at 3am (Asia/Shanghai), 4d 11h left
 
-Usage credits   off · /usage-credits to turn on
+Usage credits   off
 ```
 
 Progress bars are colored by utilization: green below 50%, yellow from 50–80%, red at 80% and above.
