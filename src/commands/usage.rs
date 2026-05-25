@@ -4,6 +4,41 @@ use terminal_size::{Width, terminal_size};
 
 use crate::api::{ExtraUsage, RateLimit};
 
+fn format_duration_short(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "now".to_string();
+    }
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let days = hours / 24;
+    let rem_hours = hours % 24;
+
+    if days > 0 {
+        if rem_hours > 0 {
+            format!("{days}d {rem_hours}h")
+        } else {
+            format!("{days}d")
+        }
+    } else if hours > 0 {
+        if minutes > 0 {
+            format!("{hours}h {minutes}m")
+        } else {
+            format!("{hours}h")
+        }
+    } else {
+        format!("{}m", minutes.max(1))
+    }
+}
+
+fn time_remaining(resets_at: &str) -> Option<String> {
+    let dt = DateTime::parse_from_rfc3339(resets_at).ok()?;
+    let secs = dt.signed_duration_since(Local::now()).num_seconds();
+    if secs < 0 {
+        return None;
+    }
+    Some(format_duration_short(secs))
+}
+
 const FILL_CHAR: char = '█';
 const EMPTY_CHAR: char = '░';
 
@@ -60,19 +95,18 @@ fn print_limit_bar(title: &str, limit: &RateLimit) {
     println!("{}", title.bold());
     println!("{} {:.0}% used", bar, utilization);
     if let Some(resets_at) = &limit.resets_at {
-        println!(
-            "{}",
-            format!("Resets {}", format_reset_time(resets_at)).dimmed()
-        );
+        let reset_str = format_reset_time(resets_at);
+        let line = match time_remaining(resets_at) {
+            Some(rem) => format!("Resets {reset_str}, {rem} left"),
+            None => format!("Resets {reset_str}"),
+        };
+        println!("{}", line.dimmed());
     }
 }
 
 fn print_extra_usage(extra: &ExtraUsage) {
     if !extra.is_enabled {
-        println!(
-            "{}",
-            "Usage credits   off · /usage-credits to turn on".dimmed()
-        );
+        println!("{}", "Usage credits   off".dimmed());
         return;
     }
     match extra.monthly_limit {
@@ -190,6 +224,31 @@ mod tests {
     fn test_progress_bar_chars_over_100_clamps() {
         let bar = progress_bar_chars(120.0, 10);
         assert_eq!(bar, "██████████");
+    }
+
+    #[test]
+    fn test_format_duration_short_seconds() {
+        assert_eq!(format_duration_short(0), "now");
+        assert_eq!(format_duration_short(-10), "now");
+        assert_eq!(format_duration_short(30), "1m");
+        assert_eq!(format_duration_short(90), "1m");
+        assert_eq!(format_duration_short(119), "1m");
+        assert_eq!(format_duration_short(120), "2m");
+    }
+
+    #[test]
+    fn test_format_duration_short_hours() {
+        assert_eq!(format_duration_short(3600), "1h");
+        assert_eq!(format_duration_short(3660), "1h 1m");
+        assert_eq!(format_duration_short(5400), "1h 30m");
+        assert_eq!(format_duration_short(7200), "2h");
+    }
+
+    #[test]
+    fn test_format_duration_short_days() {
+        assert_eq!(format_duration_short(86400), "1d");
+        assert_eq!(format_duration_short(90000), "1d 1h");
+        assert_eq!(format_duration_short(172800), "2d");
     }
 
     #[test]
