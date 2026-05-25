@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 pub struct RateLimit {
@@ -23,7 +24,10 @@ pub struct Utilization {
 }
 
 pub async fn fetch_utilization(token: &str, user_agent: &str) -> Result<Utilization, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
     let response = client
         .get("https://api.anthropic.com/api/oauth/usage")
         .header("Authorization", format!("Bearer {token}"))
