@@ -2,6 +2,14 @@
 name = "claudex"
 version = "0.1.0"
 edition = "2024"
+description = "A CLI that extends the Claude Code CLI with extra commands, starting with `claudex usage` for plan usage limits."
+license = "MIT"
+repository = "https://github.com/reedchan7/claudex"
+homepage = "https://github.com/reedchan7/claudex"
+authors = ["Reed Chan <xinyuchen77@gmail.com>"]
+keywords = ["claude", "cli", "usage", "anthropic"]
+categories = ["command-line-utilities"]
+readme = "README.md"
 
 [[bin]]
 name = "claudex"

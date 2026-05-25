@@ -1,2 +1,26 @@
+# Rust / Cargo build output
 /target
+debug/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock is committed (this crate ships a binary)
+
+# Local credentials and machine-specific config — never commit
+.claude/
+.env
+.env.*
+*.local.json
+
+# Superpowers planning artifacts (specs/plans) are kept out of the repo
 docs/superpowers
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS cruft
+.DS_Store
+Thumbs.db
