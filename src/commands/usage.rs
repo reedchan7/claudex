@@ -48,6 +48,7 @@ fn bar_width() -> usize {
         .unwrap_or(50)
 }
 
+#[cfg(test)]
 pub fn progress_bar_chars(utilization: f64, width: usize) -> String {
     let filled = (((utilization / 100.0) * width as f64).round() as usize).min(width);
     let empty = width.saturating_sub(filled);
@@ -55,14 +56,22 @@ pub fn progress_bar_chars(utilization: f64, width: usize) -> String {
 }
 
 pub fn progress_bar(utilization: f64, width: usize) -> String {
-    let bar = progress_bar_chars(utilization, width);
-    if utilization < 50.0 {
-        bar.green().to_string()
+    let filled = (((utilization / 100.0) * width as f64).round() as usize).min(width);
+    let empty = width.saturating_sub(filled);
+
+    let fill_str = FILL_CHAR.to_string().repeat(filled);
+    let empty_str = EMPTY_CHAR.to_string().repeat(empty);
+
+    let colored_fill = if utilization < 50.0 {
+        fill_str.truecolor(142, 192, 124)
     } else if utilization < 80.0 {
-        bar.yellow().to_string()
+        fill_str.yellow()
     } else {
-        bar.red().to_string()
-    }
+        fill_str.red()
+    };
+    let colored_empty = empty_str.truecolor(100, 100, 100);
+
+    format!("{colored_fill}{colored_empty}")
 }
 
 fn format_local(local_dt: DateTime<Local>, today: NaiveDate, tz_name: &str) -> String {

@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod codex;
 mod commands;
 
 use clap::{Parser, Subcommand};
@@ -15,6 +16,17 @@ struct Cli {
 enum Commands {
     /// Show Claude plan usage limits
     Usage,
+    /// Codex CLI commands
+    Codex {
+        #[command(subcommand)]
+        command: CodexCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum CodexCommands {
+    /// Show Codex plan usage limits
+    Usage,
 }
 
 #[tokio::main]
@@ -22,5 +34,8 @@ async fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::Usage => commands::usage::run().await,
+        Commands::Codex { command } => match command {
+            CodexCommands::Usage => commands::codex_usage::run().await,
+        },
     }
 }
