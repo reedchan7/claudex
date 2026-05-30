@@ -1,16 +1,28 @@
 #!/bin/sh
-# claudex installer — downloads the latest prebuilt binary for your platform.
+# claudex installer & upgrader — downloads the latest prebuilt binary for your
+# platform. Re-run it anytime to upgrade: it detects an existing install, skips
+# if you already have the latest version, and otherwise updates it in place.
 #
 #   curl -fsSL https://raw.githubusercontent.com/reedchan7/claudex/main/install.sh | sh
 #
 # No Rust toolchain required. Supports macOS and Linux (x86_64 / arm64).
 # Override the install directory with CLAUDEX_INSTALL_DIR (default: ~/.local/bin).
+# Set CLAUDEX_FORCE=1 to reinstall even if the latest version is already present.
 
 set -eu
 
 REPO="reedchan7/claudex"
 BIN="claudex"
-INSTALL_DIR="${CLAUDEX_INSTALL_DIR:-$HOME/.local/bin}"
+
+# Where to install. An explicit CLAUDEX_INSTALL_DIR always wins (and pins the
+# location, disabling the in-place upgrade detection below).
+if [ -n "${CLAUDEX_INSTALL_DIR:-}" ]; then
+	INSTALL_DIR="$CLAUDEX_INSTALL_DIR"
+	install_dir_explicit=1
+else
+	INSTALL_DIR="$HOME/.local/bin"
+	install_dir_explicit=
+fi
 
 err() {
 	echo "error: $*" >&2
@@ -107,6 +119,36 @@ echo "Resolving latest release..."
 tag="$(fetch "https://api.github.com/repos/${REPO}/releases/latest" |
 	grep '"tag_name"' | head -1 | cut -d'"' -f4)"
 [ -n "$tag" ] || err "could not determine the latest release tag"
+
+latest="${tag#v}"
+
+# Detect an existing install. If it's already the latest version, stop here.
+# Otherwise upgrade the binary the user actually runs (in place), unless the
+# install location was pinned via CLAUDEX_INSTALL_DIR.
+existing="$(command -v "$BIN" 2>/dev/null || true)"
+if [ -n "$existing" ]; then
+	current="$("$existing" --version 2>/dev/null | awk '{print $NF}')"
+	if [ "$current" = "$latest" ] && [ -z "${CLAUDEX_FORCE:-}" ]; then
+		echo "$BIN $current is already up to date."
+		echo "Re-run with CLAUDEX_FORCE=1 to reinstall."
+		exit 0
+	fi
+	if [ -z "$install_dir_explicit" ]; then
+		existing_dir="$(CDPATH= cd "$(dirname "$existing")" && pwd)"
+		if [ -w "$existing_dir" ]; then
+			INSTALL_DIR="$existing_dir"
+		else
+			echo "Note: $existing_dir is not writable; installing to $INSTALL_DIR instead."
+		fi
+	fi
+	if [ -n "$current" ] && [ "$current" != "$latest" ]; then
+		echo "Upgrading $BIN $current -> $latest..."
+	else
+		echo "Reinstalling $BIN $latest..."
+	fi
+else
+	echo "Installing $BIN $latest..."
+fi
 
 asset="${BIN}-${tag}-${platform}.tar.gz"
 url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
