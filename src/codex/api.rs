@@ -60,7 +60,9 @@ pub async fn fetch_usage(creds: &CodexCredentials) -> Result<UsageResponse, Stri
         .map_err(|e| format!("failed to fetch Codex usage data: {e}"))?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        return Err("authentication failed — try restarting Codex to refresh your token".to_string());
+        return Err(
+            "authentication failed — try restarting Codex to refresh your token".to_string(),
+        );
     }
 
     if !response.status().is_success() {

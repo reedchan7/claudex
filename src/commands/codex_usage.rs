@@ -46,11 +46,7 @@ fn progress_bar(used_percent: f64, width: usize) -> String {
             empty_str.truecolor(100, 100, 100)
         )
     } else {
-        format!(
-            "{}{}",
-            fill_str.red(),
-            empty_str.truecolor(100, 100, 100)
-        )
+        format!("{}{}", fill_str.red(), empty_str.truecolor(100, 100, 100))
     }
 }
 
@@ -172,7 +168,10 @@ pub async fn run() {
 
     if let Some(rl) = &usage.rate_limit {
         let mut first = true;
-        for window in [&rl.primary_window, &rl.secondary_window].into_iter().flatten() {
+        for window in [&rl.primary_window, &rl.secondary_window]
+            .into_iter()
+            .flatten()
+        {
             if !first {
                 println!();
             }
@@ -185,7 +184,10 @@ pub async fn run() {
         for extra in additional {
             if let Some(rl) = &extra.rate_limit {
                 let name = extra.limit_name.as_deref().unwrap_or("Other");
-                for window in [&rl.primary_window, &rl.secondary_window].into_iter().flatten() {
+                for window in [&rl.primary_window, &rl.secondary_window]
+                    .into_iter()
+                    .flatten()
+                {
                     println!();
                     let label = format!("{name} — {}", window_label(window.limit_window_seconds));
                     print_window(&label, window);
