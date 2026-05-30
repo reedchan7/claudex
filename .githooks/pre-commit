@@ -1,0 +1,18 @@
+#!/bin/sh
+# Auto-format staged Rust files before committing, then re-stage them so the
+# formatted version is what gets committed. Fast (formatting only) — the heavier
+# clippy/test gate runs in pre-push. Enable with: make setup-hooks
+set -eu
+
+command -v cargo >/dev/null 2>&1 || exit 0
+
+staged="$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')"
+[ -n "$staged" ] || exit 0
+
+cargo fmt
+
+# Re-stage only the files that were already part of this commit, so we never
+# pull in unrelated unstaged changes.
+printf '%s\n' "$staged" | while IFS= read -r file; do
+	[ -n "$file" ] && git add -- "$file"
+done

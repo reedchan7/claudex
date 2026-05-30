@@ -1,5 +1,5 @@
 .PHONY: help build release test fmt fmt-check lint check run install uninstall clean \
-	version set-version bump-patch bump-minor bump-major
+	setup-hooks version set-version bump-patch bump-minor bump-major
 
 # Default target: list available commands
 help:
@@ -15,6 +15,7 @@ help:
 	@echo "  make install     Install claudex to ~/.cargo/bin"
 	@echo "  make uninstall   Remove the installed claudex binary"
 	@echo "  make clean       Remove build artifacts"
+	@echo "  make setup-hooks Enable local git hooks (pre-commit fmt, pre-push check)"
 	@echo "  make version              Print the current crate version"
 	@echo "  make set-version VERSION=x.y.z   Set an explicit version, commit, and tag"
 	@echo "  make bump-patch           Bump patch version, commit, and tag (x.y.Z+1)"
@@ -52,6 +53,14 @@ uninstall:
 
 clean:
 	cargo clean
+
+# Point git at the version-controlled hooks in .githooks/ so every clone can
+# enable them with one command. pre-commit auto-formats staged Rust; pre-push
+# runs the full `make check` gate.
+setup-hooks:
+	@chmod +x .githooks/*
+	@git config core.hooksPath .githooks
+	@echo "Git hooks enabled (core.hooksPath -> .githooks)."
 
 version:
 	@grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/'

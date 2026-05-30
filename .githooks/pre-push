@@ -1,0 +1,9 @@
+#!/bin/sh
+# Mirror the CI gate (fmt-check + clippy + test) before pushing, so failures are
+# caught locally instead of on GitHub. Enable with: make setup-hooks
+set -eu
+
+command -v cargo >/dev/null 2>&1 || exit 0
+
+echo "pre-push: running 'make check' (fmt-check + clippy + test)..."
+make check
