@@ -3,10 +3,21 @@ use terminal_size::{Width, terminal_size};
 
 const RULE_CHAR: char = '\u{2501}'; // ━
 
-fn rule_width() -> usize {
+// Widest possible progress-bar line suffix: " 100% used".
+const PCT_SUFFIX_WIDTH: usize = 10;
+
+// Matches `bar_width()` in usage.rs / codex_usage.rs so the rule lines up
+// with the bars rendered underneath each header.
+fn bar_width() -> usize {
     terminal_size()
-        .map(|(Width(w), _)| (w as usize).min(50))
+        .map(|(Width(w), _)| (w as usize).saturating_sub(10).min(50))
         .unwrap_or(50)
+}
+
+// Span the rule across the longest line a section can print: a full bar
+// plus its percentage suffix. Both sections share this width, so they align.
+fn rule_width() -> usize {
+    bar_width() + PCT_SUFFIX_WIDTH
 }
 
 fn print_header(title: &str, accent: (u8, u8, u8)) {
