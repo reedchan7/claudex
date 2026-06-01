@@ -16,8 +16,13 @@ No interactive session, no digging through a web app — just run the command an
 
 ## Example
 
+`claudex usage --all` shows everything at once — run `claudex usage` or `claudex codex usage` on its own to see just that provider.
+
 ```console
-$ claudex usage
+$ claudex usage --all
+Claude Code
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Current session
 █████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 34% used
 Resets 2:30pm (Asia/Shanghai), 2h 30m left
@@ -31,10 +36,10 @@ Current week (Sonnet only)
 Resets May 30 at 3am (Asia/Shanghai), 4d 11h left
 
 Usage credits   off
-```
 
-```console
-$ claudex codex usage
+Codex
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Subscription: Pro
 
 Current session (5h)
@@ -126,6 +131,7 @@ This installs the `claudex` binary to `~/.cargo/bin`.
 ```sh
 claudex usage         # show Claude plan usage limits
 claudex codex usage   # show Codex / ChatGPT plan usage limits
+claudex usage --all   # show Claude and Codex usage together
 claudex --help        # list available commands
 claudex --version     # print the version
 ```

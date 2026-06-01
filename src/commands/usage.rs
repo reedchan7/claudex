@@ -140,24 +140,19 @@ fn print_extra_usage(extra: &ExtraUsage) {
 }
 
 pub async fn run() {
-    let token = match crate::auth::read_token() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
-        }
-    };
+    if let Err(e) = render().await {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
+}
+
+pub async fn render() -> Result<(), String> {
+    let token = crate::auth::read_token()?;
 
     let version = crate::auth::get_claude_version();
     let user_agent = format!("claude-code/{version}");
 
-    let utilization = match crate::api::fetch_utilization(&token, &user_agent).await {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
-        }
-    };
+    let utilization = crate::api::fetch_utilization(&token, &user_agent).await?;
 
     let limits: &[(&str, Option<&RateLimit>)] = &[
         ("Current session", utilization.five_hour.as_ref()),
@@ -171,7 +166,7 @@ pub async fn run() {
     let has_any = limits.iter().any(|(_, l)| l.is_some());
     if !has_any {
         println!("/usage is only available for subscription plans.");
-        return;
+        return Ok(());
     }
 
     let mut first = true;
@@ -189,6 +184,8 @@ pub async fn run() {
         println!();
         print_extra_usage(extra);
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

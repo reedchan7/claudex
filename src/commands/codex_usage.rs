@@ -135,21 +135,16 @@ fn capitalize(s: &str) -> String {
 }
 
 pub async fn run() {
-    let creds = match crate::codex::auth::read_credentials() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
-        }
-    };
+    if let Err(e) = render().await {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
+}
 
-    let usage = match crate::codex::api::fetch_usage(&creds).await {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
-        }
-    };
+pub async fn render() -> Result<(), String> {
+    let creds = crate::codex::auth::read_credentials()?;
+
+    let usage = crate::codex::api::fetch_usage(&creds).await?;
 
     let has_limits = usage.rate_limit.is_some()
         || usage
@@ -159,7 +154,7 @@ pub async fn run() {
 
     if !has_limits {
         println!("Codex usage data is not available for your plan.");
-        return;
+        return Ok(());
     }
 
     if let Some(plan) = &usage.plan_type {
@@ -212,6 +207,8 @@ pub async fn run() {
             }
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

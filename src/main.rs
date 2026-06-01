@@ -15,7 +15,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Show Claude plan usage limits
-    Usage,
+    Usage {
+        /// Show both Claude Code and Codex usage limits
+        #[arg(long)]
+        all: bool,
+    },
     /// Codex CLI commands
     Codex {
         #[command(subcommand)]
@@ -33,7 +37,13 @@ enum CodexCommands {
 async fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Usage => commands::usage::run().await,
+        Commands::Usage { all } => {
+            if all {
+                commands::usage_all::run().await
+            } else {
+                commands::usage::run().await
+            }
+        }
         Commands::Codex { command } => match command {
             CodexCommands::Usage => commands::codex_usage::run().await,
         },
