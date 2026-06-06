@@ -155,7 +155,7 @@ pub async fn render() -> Result<(), String> {
     let utilization = crate::api::fetch_utilization(&token, &user_agent).await?;
 
     let limits: &[(&str, Option<&RateLimit>)] = &[
-        ("Current session", utilization.five_hour.as_ref()),
+        ("Current session (5h)", utilization.five_hour.as_ref()),
         ("Current week (all models)", utilization.seven_day.as_ref()),
         (
             "Current week (Sonnet only)",
