@@ -67,12 +67,9 @@ version:
 
 # Set the [package] version, sync Cargo.lock, commit, and tag.
 # $(1)=patch|minor|major bumps the current version; $(1)=set uses VERSION=x.y.z.
-# Requires a clean working tree. Does not push — run `git push --follow-tags` to release.
+# Does not push — run `git push --follow-tags` to release.
 define bump
 	@set -eu; \
-	if [ -n "$$(git status --porcelain)" ]; then \
-		echo "error: working tree not clean — commit or stash changes first"; exit 1; \
-	fi; \
 	cur=$$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/'); \
 	if [ "$(1)" = "set" ]; then \
 		new="$(VERSION)"; \
