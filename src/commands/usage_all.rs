@@ -28,18 +28,18 @@ fn print_header(title: &str, accent: (u8, u8, u8)) {
     println!();
 }
 
-pub async fn run() {
+pub async fn run(show_timezone: bool) {
     let mut had_error = false;
 
     print_header("Claude Code", (217, 119, 87));
-    if let Err(e) = crate::commands::usage::render().await {
+    if let Err(e) = crate::commands::usage::render(show_timezone).await {
         eprintln!("{} {e}", "Error:".red());
         had_error = true;
     }
 
     println!();
     print_header("Codex", (16, 163, 127));
-    if let Err(e) = crate::commands::codex_usage::render().await {
+    if let Err(e) = crate::commands::codex_usage::render(show_timezone).await {
         eprintln!("{} {e}", "Error:".red());
         had_error = true;
     }

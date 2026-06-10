@@ -74,37 +74,51 @@ pub fn progress_bar(utilization: f64, width: usize) -> String {
     format!("{colored_fill}{colored_empty}")
 }
 
-fn format_local(local_dt: DateTime<Local>, today: NaiveDate, tz_name: &str) -> String {
+fn format_local(
+    local_dt: DateTime<Local>,
+    today: NaiveDate,
+    tz_name: &str,
+    show_timezone: bool,
+) -> String {
     let time_str = if local_dt.minute() == 0 {
         local_dt.format("%-I%P").to_string() // "3am"
     } else {
         local_dt.format("%-I:%M%P").to_string() // "2:30pm"
     };
-
-    if local_dt.date_naive() == today {
+    let time_str = if show_timezone {
         format!("{time_str} ({tz_name})")
     } else {
+        time_str
+    };
+
+    if local_dt.date_naive() == today {
+        time_str
+    } else {
         let date_str = local_dt.format("%b %-d").to_string(); // "May 30"
-        format!("{date_str} at {time_str} ({tz_name})")
+        format!("{date_str} at {time_str}")
     }
 }
 
-pub fn format_reset_time(resets_at: &str) -> String {
+fn format_reset_time_with_options(resets_at: &str, show_timezone: bool) -> String {
     let Ok(dt) = DateTime::parse_from_rfc3339(resets_at) else {
         return resets_at.to_string();
     };
     let local_dt = dt.with_timezone(&Local);
-    let tz_name = iana_time_zone::get_timezone().unwrap_or_else(|_| "Local".to_string());
-    format_local(local_dt, Local::now().date_naive(), &tz_name)
+    let tz_name = if show_timezone {
+        iana_time_zone::get_timezone().unwrap_or_else(|_| "Local".to_string())
+    } else {
+        String::new()
+    };
+    format_local(local_dt, Local::now().date_naive(), &tz_name, show_timezone)
 }
 
-fn print_limit_bar(title: &str, limit: &RateLimit) {
+fn print_limit_bar(title: &str, limit: &RateLimit, show_timezone: bool) {
     let utilization = limit.utilization.unwrap_or(0.0);
     let bar = progress_bar(utilization, bar_width());
     println!("{}", title.bold());
     println!("{} {:.0}% used", bar, utilization);
     if let Some(resets_at) = &limit.resets_at {
-        let reset_str = format_reset_time(resets_at);
+        let reset_str = format_reset_time_with_options(resets_at, show_timezone);
         let line = match time_remaining(resets_at) {
             Some(rem) => format!("Resets {reset_str}, {rem} left"),
             None => format!("Resets {reset_str}"),
@@ -139,14 +153,14 @@ fn print_extra_usage(extra: &ExtraUsage) {
     }
 }
 
-pub async fn run() {
-    if let Err(e) = render().await {
+pub async fn run(show_timezone: bool) {
+    if let Err(e) = render(show_timezone).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
 
-pub async fn render() -> Result<(), String> {
+pub async fn render(show_timezone: bool) -> Result<(), String> {
     let token = crate::auth::read_token()?;
 
     let version = crate::auth::get_claude_version();
@@ -175,7 +189,7 @@ pub async fn render() -> Result<(), String> {
             if !first {
                 println!();
             }
-            print_limit_bar(title, limit);
+            print_limit_bar(title, limit, show_timezone);
             first = false;
         }
     }
@@ -259,20 +273,20 @@ mod tests {
 
     #[test]
     fn test_format_reset_time_valid_iso_returns_non_empty() {
-        let result = format_reset_time("2026-05-29T19:00:00+00:00");
+        let result = format_reset_time_with_options("2026-05-29T19:00:00+00:00", false);
         assert!(!result.is_empty());
-        assert!(result.contains('(') && result.contains(')'));
+        assert!(!result.contains('('));
     }
 
     #[test]
     fn test_format_reset_time_invalid_returns_original() {
-        let result = format_reset_time("not-a-date");
+        let result = format_reset_time_with_options("not-a-date", false);
         assert_eq!(result, "not-a-date");
     }
 
     #[test]
     fn test_format_reset_time_fractional_seconds() {
-        let result = format_reset_time("2026-05-25T06:30:00.176572+00:00");
+        let result = format_reset_time_with_options("2026-05-25T06:30:00.176572+00:00", false);
         assert!(!result.is_empty());
     }
 
@@ -280,8 +294,9 @@ mod tests {
     fn test_format_local_same_day_with_minutes() {
         let dt = Local.with_ymd_and_hms(2026, 5, 25, 14, 30, 0).unwrap();
         let today = dt.date_naive();
+        assert_eq!(format_local(dt, today, "Asia/Shanghai", false), "2:30pm");
         assert_eq!(
-            format_local(dt, today, "Asia/Shanghai"),
+            format_local(dt, today, "Asia/Shanghai", true),
             "2:30pm (Asia/Shanghai)"
         );
     }
@@ -290,8 +305,9 @@ mod tests {
     fn test_format_local_same_day_on_the_hour() {
         let dt = Local.with_ymd_and_hms(2026, 5, 25, 15, 0, 0).unwrap();
         let today = dt.date_naive();
+        assert_eq!(format_local(dt, today, "Asia/Shanghai", false), "3pm");
         assert_eq!(
-            format_local(dt, today, "Asia/Shanghai"),
+            format_local(dt, today, "Asia/Shanghai", true),
             "3pm (Asia/Shanghai)"
         );
     }
@@ -304,7 +320,11 @@ mod tests {
             .unwrap()
             .date_naive();
         assert_eq!(
-            format_local(dt, today, "Asia/Shanghai"),
+            format_local(dt, today, "Asia/Shanghai", false),
+            "May 30 at 3am"
+        );
+        assert_eq!(
+            format_local(dt, today, "Asia/Shanghai", true),
             "May 30 at 3am (Asia/Shanghai)"
         );
     }

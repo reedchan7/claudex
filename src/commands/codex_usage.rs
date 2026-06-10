@@ -76,13 +76,13 @@ fn format_duration_short(seconds: i64) -> String {
     }
 }
 
-fn format_reset_from_unix(reset_at: i64) -> String {
+fn format_reset_from_unix_with_options(reset_at: i64, show_timezone: bool) -> String {
     let Some(dt) = DateTime::from_timestamp(reset_at, 0) else {
         return String::new();
     };
     let local_dt = dt.with_timezone(&Local);
     let today = Local::now().date_naive();
-    format_local(local_dt, today)
+    format_local(local_dt, today, show_timezone)
 }
 
 fn time_remaining_from_unix(reset_at: i64) -> Option<String> {
@@ -94,28 +94,33 @@ fn time_remaining_from_unix(reset_at: i64) -> Option<String> {
     Some(format_duration_short(secs))
 }
 
-fn format_local(local_dt: DateTime<Local>, today: NaiveDate) -> String {
-    let tz = iana_time_zone::get_timezone().unwrap_or_else(|_| "Local".to_string());
+fn format_local(local_dt: DateTime<Local>, today: NaiveDate, show_timezone: bool) -> String {
     let time_str = if local_dt.minute() == 0 {
         local_dt.format("%-I%P").to_string()
     } else {
         local_dt.format("%-I:%M%P").to_string()
     };
-
-    if local_dt.date_naive() == today {
+    let time_str = if show_timezone {
+        let tz = iana_time_zone::get_timezone().unwrap_or_else(|_| "Local".to_string());
         format!("{time_str} ({tz})")
     } else {
+        time_str
+    };
+
+    if local_dt.date_naive() == today {
+        time_str
+    } else {
         let date_str = local_dt.format("%b %-d").to_string();
-        format!("{date_str} at {time_str} ({tz})")
+        format!("{date_str} at {time_str}")
     }
 }
 
-fn print_window(label: &str, window: &WindowSnapshot) {
+fn print_window(label: &str, window: &WindowSnapshot, show_timezone: bool) {
     let bar = progress_bar(window.used_percent, bar_width());
     println!("{}", label.bold());
     println!("{} {:.0}% used", bar, window.used_percent);
     if let Some(reset_at) = window.reset_at {
-        let reset_str = format_reset_from_unix(reset_at);
+        let reset_str = format_reset_from_unix_with_options(reset_at, show_timezone);
         if !reset_str.is_empty() {
             let line = match time_remaining_from_unix(reset_at) {
                 Some(rem) => format!("Resets {reset_str}, {rem} left"),
@@ -134,14 +139,14 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-pub async fn run() {
-    if let Err(e) = render().await {
+pub async fn run(show_timezone: bool) {
+    if let Err(e) = render(show_timezone).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
 
-pub async fn render() -> Result<(), String> {
+pub async fn render(show_timezone: bool) -> Result<(), String> {
     let creds = crate::codex::auth::read_credentials()?;
 
     let usage = crate::codex::api::fetch_usage(&creds).await?;
@@ -170,7 +175,11 @@ pub async fn render() -> Result<(), String> {
             if !first {
                 println!();
             }
-            print_window(window_label(window.limit_window_seconds), window);
+            print_window(
+                window_label(window.limit_window_seconds),
+                window,
+                show_timezone,
+            );
             first = false;
         }
     }
@@ -185,7 +194,7 @@ pub async fn render() -> Result<(), String> {
                 {
                     println!();
                     let label = format!("{name} — {}", window_label(window.limit_window_seconds));
-                    print_window(&label, window);
+                    print_window(&label, window, show_timezone);
                 }
             }
         }
@@ -233,9 +242,20 @@ mod tests {
 
     #[test]
     fn test_format_reset_from_unix_valid() {
-        let result = format_reset_from_unix(1779972641);
+        let result = format_reset_from_unix_with_options(1779972641, false);
         assert!(!result.is_empty());
-        assert!(result.contains('('));
+        assert!(!result.contains('('));
+    }
+
+    #[test]
+    fn test_format_local_hides_timezone_by_default() {
+        let dt = DateTime::from_timestamp(1779972641, 0)
+            .unwrap()
+            .with_timezone(&Local);
+        let today = dt.date_naive();
+
+        assert!(!format_local(dt, today, false).contains('('));
+        assert!(format_local(dt, today, true).contains('('));
     }
 
     #[test]

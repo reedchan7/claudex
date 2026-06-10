@@ -17,6 +17,7 @@ No interactive session, no digging through a web app — just run the command an
 ## Example
 
 `claudex usage --all` shows everything at once — run `claudex usage` or `claudex codex usage` on its own to see just that provider.
+Reset times are shown in your local timezone. Add `--show-timezone` when you also want the timezone name in the output.
 
 ```console
 $ claudex usage --all
@@ -25,15 +26,15 @@ Claude Code
 
 Current session
 █████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 34% used
-Resets 2:30pm (Asia/Shanghai), 2h 30m left
+Resets 2:30pm, 2h 30m left
 
 Current week (all models)
 ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 6% used
-Resets May 30 at 3am (Asia/Shanghai), 4d 11h left
+Resets May 30 at 3am, 4d 11h left
 
 Current week (Sonnet only)
 ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 3% used
-Resets May 30 at 3am (Asia/Shanghai), 4d 11h left
+Resets May 30 at 3am, 4d 11h left
 
 Usage credits   off
 
@@ -44,19 +45,19 @@ Subscription: Pro
 
 Current session (5h)
 ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 4% used
-Resets 6:19pm (Asia/Shanghai), 4h 35m left
+Resets 6:19pm, 4h 35m left
 
 Current week
 █████████████████████████████░░░░░░░░░░░░░░░░░░░░░ 58% used
-Resets May 31 at 2:55pm (Asia/Shanghai), 1d 1h left
+Resets May 31 at 2:55pm, 1d 1h left
 
 GPT-5.3-Codex-Spark — Current session (5h)
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0% used
-Resets 6:44pm (Asia/Shanghai), 5h left
+Resets 6:44pm, 5h left
 
 GPT-5.3-Codex-Spark — Current week
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0% used
-Resets Jun 6 at 1:44pm (Asia/Shanghai), 7d left
+Resets Jun 6 at 1:44pm, 7d left
 ```
 
 Progress bars are colored by utilization: green below 50%, yellow from 50–80%, red at 80% and above.
@@ -132,6 +133,8 @@ This installs the `claudex` binary to `~/.cargo/bin`.
 claudex usage         # show Claude plan usage limits
 claudex codex usage   # show Codex / ChatGPT plan usage limits
 claudex usage --all   # show Claude and Codex usage together
+claudex usage --show-timezone       # include the timezone name in reset times
+claudex codex usage --show-timezone # include the timezone name for Codex usage
 claudex --help        # list available commands
 claudex --version     # print the version
 ```
