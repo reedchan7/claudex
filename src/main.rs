@@ -17,7 +17,7 @@ struct Cli {
 enum Commands {
     /// Show Claude plan usage limits
     Usage {
-        /// Show Claude Code, Codex, and Antigravity usage limits
+        /// Show Claude Code, Codex, and Gemini / Antigravity usage limits
         #[arg(long)]
         all: bool,
         /// Show the timezone name next to reset times
@@ -29,7 +29,7 @@ enum Commands {
         #[command(subcommand)]
         command: CodexCommands,
     },
-    /// Antigravity CLI commands
+    /// Gemini / Antigravity CLI commands
     #[command(name = "agy", alias = "antigravity")]
     Agy {
         #[command(subcommand)]
@@ -49,7 +49,7 @@ enum CodexCommands {
 
 #[derive(Subcommand)]
 enum AgyCommands {
-    /// Show Antigravity / Gemini usage limits
+    /// Show Gemini / Antigravity usage limits
     Usage {
         /// Show the timezone name next to reset times
         #[arg(long)]

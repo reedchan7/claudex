@@ -18,11 +18,18 @@ pub struct ProviderStatus {
 }
 
 impl Provider {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Provider::Claude => "Claude Code",
             Provider::Codex => "Codex",
+            Provider::Antigravity => "Gemini / Antigravity",
+        }
+    }
+
+    fn session_label(self) -> &'static str {
+        match self {
             Provider::Antigravity => "Antigravity",
+            _ => self.label(),
         }
     }
 
@@ -56,11 +63,12 @@ fn empty_bar(width: usize) -> String {
 pub fn status_for_error(provider: Provider, error: &str) -> ProviderStatus {
     let lower = error.to_ascii_lowercase();
     let label = provider.label();
+    let session_label = provider.session_label();
 
     if is_not_connected(provider, &lower) {
         return ProviderStatus {
             heading: format!("{label} is not connected"),
-            detail: format!("No local {label} session was found on this machine."),
+            detail: format!("No local {session_label} session was found on this machine."),
             next_step: provider.connect_action().to_string(),
             details: None,
         };
@@ -68,7 +76,7 @@ pub fn status_for_error(provider: Provider, error: &str) -> ProviderStatus {
 
     if provider_is_unsupported(provider, &lower) {
         return ProviderStatus {
-            heading: "Antigravity credentials are unavailable".to_string(),
+            heading: format!("{label} credentials are unavailable"),
             detail: "claudex currently reads Antigravity sessions from macOS Keychain.".to_string(),
             next_step: "Use this command on macOS after signing in with `agy`.".to_string(),
             details: None,
@@ -78,7 +86,7 @@ pub fn status_for_error(provider: Provider, error: &str) -> ProviderStatus {
     if lower.contains("authentication failed") {
         return ProviderStatus {
             heading: format!("{label} session needs refresh"),
-            detail: format!("The saved {label} token was rejected."),
+            detail: format!("The saved {session_label} token was rejected."),
             next_step: provider.refresh_action().to_string(),
             details: None,
         };
@@ -87,7 +95,7 @@ pub fn status_for_error(provider: Provider, error: &str) -> ProviderStatus {
     if looks_like_invalid_credentials(&lower) {
         return ProviderStatus {
             heading: format!("{label} credentials need repair"),
-            detail: format!("The local {label} credentials could not be read."),
+            detail: format!("The local {session_label} credentials could not be read."),
             next_step: provider.refresh_action().to_string(),
             details: Some(error.to_string()),
         };
@@ -188,10 +196,15 @@ mod tests {
             "authentication failed — try restarting Antigravity to refresh your Google login",
         );
 
-        assert_eq!(status.heading, "Antigravity session needs refresh");
+        assert_eq!(status.heading, "Gemini / Antigravity session needs refresh");
         assert_eq!(status.detail, "The saved Antigravity token was rejected.");
         assert_eq!(status.next_step, "Run `agy` and sign in with Google.");
         assert!(status.details.is_none());
+    }
+
+    #[test]
+    fn antigravity_provider_label_names_both_surfaces() {
+        assert_eq!(Provider::Antigravity.label(), "Gemini / Antigravity");
     }
 
     #[test]

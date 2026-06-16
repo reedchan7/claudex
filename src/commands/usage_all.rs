@@ -5,7 +5,7 @@ use crate::commands::status::{self, Provider};
 
 const RULE_CHAR: char = '\u{2501}'; // ━
 
-// Widest possible progress-bar line suffix: " 100.00% remaining".
+// Widest possible progress-bar line suffix: " 100.00% used".
 const PCT_SUFFIX_WIDTH: usize = 18;
 
 // Matches `bar_width()` in provider renderers so the rule lines up with the
@@ -54,7 +54,7 @@ pub async fn run(show_timezone: bool) {
     }
 
     println!();
-    print_header("Antigravity", (66, 133, 244));
+    print_header(Provider::Antigravity.label(), (66, 133, 244));
     match crate::commands::agy_usage::render(show_timezone).await {
         Ok(()) => rendered += 1,
         Err(e) => {

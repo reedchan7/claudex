@@ -8,12 +8,12 @@ Three commands set the tone:
 
 - **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, Sonnet-only, and usage credits, all rendered as crisp colored bars in a single command.
 - **`claudex codex usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits.
-- **`claudex agy usage`** — show your Antigravity quota groups: Gemini models and Claude/GPT models, with weekly and 5-hour remaining quota from `agy`'s own quota API.
+- **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and per-tier 5-hour usage from the same Google Code Assist quota APIs.
 
 No interactive session, no digging through a web app — just run the command and you're done. More commands are on the way.
 
 > [!WARNING]
-> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, or Google. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, and Antigravity / Gemini CLI already store locally, and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, and `cloudcode-pa.googleapis.com`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
+> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, or Google. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, and Gemini / Antigravity CLI already store locally, and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, and `cloudcode-pa.googleapis.com`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
 
 ## Example
 
@@ -60,33 +60,48 @@ GPT-5.3-Codex-Spark — Current week
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0% used
 Resets Jun 6 at 1:44pm, 7d left
 
-Antigravity
+Gemini / Antigravity
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Gemini Models
 Models within this group: Gemini Flash, Gemini Pro
 
 Weekly Limit
-██████████████████████████████████████████████░░░░ 92.08% remaining
+████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 7.92% used
 Refreshes Jun 19 at 4:46pm, 2d 21h left
 
 Five Hour Limit
-██████████████████████████████████████████████████ 100.00% remaining
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0.00% used
 Refreshes 4:39pm, 4h 58m left
 
 Claude and GPT models
 Models within this group: Claude Opus, Claude Sonnet, GPT-OSS
 
 Weekly Limit
-████████████████████████████████████░░░░░░░░░░░░░░ 71.44% remaining
+██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 28.56% used
 Refreshes Jun 23 at 9:30am, 6d 17h left
 
 Five Hour Limit
-████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 15.60% remaining
+██████████████████████████████████████████░░░░░░░░ 84.40% used
 Refreshes 2:30pm, 2h 49m left
+
+───────────────────────────────────────────────────────────────
+Model Usage (5H)
+
+Pro
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0.00% used
+Resets: 4:39pm, 4h 58m left
+
+Flash
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0.00% used
+Resets: 4:39pm, 4h 58m left
+
+Claude Sonnet
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0.00% used
+Resets: 2:30pm, 2h 49m left
 ```
 
-Claude and Codex progress bars are colored by utilization: green below 50%, yellow from 50–80%, red at 80% and above. Antigravity bars show remaining quota, so low remaining quota is red.
+Progress bars are colored by utilization: green below 50%, yellow from 50–80%, red at 80% and above.
 
 ## How it works
 
@@ -106,23 +121,23 @@ It then detects your installed `claude` version (via `claude --version`) to send
 
 It reads the access token from `~/.codex/auth.json` (written when you sign in with the Codex CLI — run `codex`), sends a `codex-cli` `User-Agent` plus your `ChatGPT-Account-Id`, calls `GET https://chatgpt.com/backend-api/wham/usage`, and renders the response. If you can run `codex`, you can run `claudex codex usage`.
 
-### `claudex agy usage` (Antigravity / Gemini)
+### `claudex agy usage` (Gemini / Antigravity)
 
-It reads Antigravity's Google OAuth access token from the system keyring (on macOS, Keychain service `gemini`, account `antigravity`), calls `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` with an Antigravity CLI user agent, and renders the same quota groups shown by `agy`'s Models & Quota view. If the token has expired, run `agy` once so Antigravity refreshes its saved session.
+It reads Antigravity's Google OAuth access token from the system keyring (on macOS, Keychain service `gemini`, account `antigravity`), calls `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` for pooled quota groups, then uses `loadCodeAssist` plus `retrieveUserQuota` on `https://cloudcode-pa.googleapis.com/v1internal` for the model-level 5-hour buckets. If the token has expired, run `agy` once so Antigravity refreshes its saved session.
 
-Antigravity reports pooled quota groups rather than separate limits for every model name. claudex keeps that shape and displays each returned bucket, typically weekly and 5-hour limits for:
+The summary endpoint reports pooled quota groups. claudex keeps that shape, then adds a `Model Usage (5H)` section from real `modelId` buckets aggregated by tier:
 
 - **Gemini Models** — Gemini Flash and Gemini Pro family usage.
 - **Claude and GPT models** — Claude Opus, Claude Sonnet, and GPT-OSS family usage.
 
-Because the endpoint is account- and tier-aware, the exact groups, percentages, and refresh windows come from your current Antigravity session.
+Because the endpoints are account- and tier-aware, the exact groups, percentages, and refresh windows come from your current Antigravity session.
 
 ## Requirements
 
 To **run** claudex (using a prebuilt binary), you only need:
 
 - **macOS or Linux** (x86_64 or arm64). Windows is best-effort — no prebuilt binary; build from source.
-- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, and/or an authenticated **Antigravity / Gemini CLI** install for `claudex agy usage`, with an active subscription or quota.
+- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, and/or an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, with an active subscription or quota.
 
 No Rust toolchain is required to run a prebuilt binary. Rust (edition 2024, so 1.85+) is only needed if you build from source.
 
@@ -169,11 +184,11 @@ This installs the `claudex` binary to `~/.cargo/bin`.
 ```sh
 claudex usage         # show Claude plan usage limits
 claudex codex usage   # show Codex / ChatGPT plan usage limits
-claudex agy usage     # show Antigravity / Gemini quota limits
-claudex usage --all   # show Claude, Codex, and Antigravity usage together
+claudex agy usage     # show Gemini / Antigravity quota limits
+claudex usage --all   # show Claude, Codex, and Gemini / Antigravity usage together
 claudex usage --show-timezone       # include the timezone name in reset times
 claudex codex usage --show-timezone # include the timezone name for Codex usage
-claudex agy usage --show-timezone   # include the timezone name for Antigravity usage
+claudex agy usage --show-timezone   # include the timezone name for Gemini / Antigravity usage
 claudex --help        # list available commands
 claudex --version     # print the version
 ```
