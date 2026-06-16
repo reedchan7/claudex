@@ -1,5 +1,5 @@
 .PHONY: help build release test fmt fmt-check lint check run install uninstall clean \
-	setup-hooks version set-version bump-patch bump-minor bump-major
+	setup-hooks version set-version bump-patch bump-minor bump-major tag-version
 
 # Default target: list available commands
 help:
@@ -17,10 +17,11 @@ help:
 	@echo "  make clean       Remove build artifacts"
 	@echo "  make setup-hooks Enable local git hooks (pre-commit fmt, pre-push check)"
 	@echo "  make version              Print the current crate version"
-	@echo "  make set-version VERSION=x.y.z   Set an explicit version, commit, and tag"
-	@echo "  make bump-patch           Bump patch version, commit, and tag (x.y.Z+1)"
-	@echo "  make bump-minor           Bump minor version, commit, and tag (x.Y+1.0)"
-	@echo "  make bump-major           Bump major version, commit, and tag (X+1.0.0)"
+	@echo "  make set-version VERSION=x.y.z   Set an explicit version (no commit/tag)"
+	@echo "  make bump-patch           Bump patch version in files only (x.y.Z+1)"
+	@echo "  make bump-minor           Bump minor version in files only (x.Y+1.0)"
+	@echo "  make bump-major           Bump major version in files only (X+1.0.0)"
+	@echo "  make tag-version          Tag current committed version as vX.Y.Z"
 
 build:
 	cargo build
@@ -65,9 +66,10 @@ setup-hooks:
 version:
 	@grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/'
 
-# Set the [package] version, sync Cargo.lock, commit, and tag.
+# Set the [package] version and sync Cargo.lock.
 # $(1)=patch|minor|major bumps the current version; $(1)=set uses VERSION=x.y.z.
-# Does not push — run `git push --follow-tags` to release.
+# Does not commit or tag, so the version bump can be committed with the code
+# it releases.
 define bump
 	@set -eu; \
 	cur=$$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/'); \
@@ -87,11 +89,9 @@ define bump
 	awk -v ver="$$new" '/^version = / && !d { print "version = \"" ver "\""; d=1; next } { print }' \
 		Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml; \
 	cargo update -w; \
-	git add Cargo.toml Cargo.lock; \
-	git commit -q -m "chore: release v$$new"; \
-	git tag "v$$new"; \
-	echo "Updated $$cur -> $$new, committed, and tagged v$$new"; \
-	echo "Release it with: git push origin main --follow-tags"
+	echo "Updated $$cur -> $$new"; \
+	echo "Commit Cargo.toml and Cargo.lock when ready."; \
+	echo "Tag the committed release with: make tag-version"
 endef
 
 set-version:
@@ -105,3 +105,19 @@ bump-minor:
 
 bump-major:
 	$(call bump,major)
+
+tag-version:
+	@set -eu; \
+	version=$$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/'); \
+	tag="v$$version"; \
+	if ! git diff --quiet -- Cargo.toml Cargo.lock || ! git diff --cached --quiet -- Cargo.toml Cargo.lock; then \
+		echo "error: commit Cargo.toml and Cargo.lock before tagging $$tag"; \
+		exit 1; \
+	fi; \
+	if git rev-parse -q --verify "refs/tags/$$tag" >/dev/null; then \
+		echo "error: tag $$tag already exists"; \
+		exit 1; \
+	fi; \
+	git tag "$$tag"; \
+	echo "Tagged HEAD as $$tag"; \
+	echo "Release it with: git push origin main --follow-tags"

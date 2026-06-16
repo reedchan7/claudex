@@ -1,3 +1,4 @@
+mod agy;
 mod api;
 mod auth;
 mod codex;
@@ -16,7 +17,7 @@ struct Cli {
 enum Commands {
     /// Show Claude plan usage limits
     Usage {
-        /// Show both Claude Code and Codex usage limits
+        /// Show Claude Code, Codex, and Antigravity usage limits
         #[arg(long)]
         all: bool,
         /// Show the timezone name next to reset times
@@ -28,11 +29,27 @@ enum Commands {
         #[command(subcommand)]
         command: CodexCommands,
     },
+    /// Antigravity CLI commands
+    #[command(name = "agy", alias = "antigravity")]
+    Agy {
+        #[command(subcommand)]
+        command: AgyCommands,
+    },
 }
 
 #[derive(Subcommand)]
 enum CodexCommands {
     /// Show Codex plan usage limits
+    Usage {
+        /// Show the timezone name next to reset times
+        #[arg(long)]
+        show_timezone: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgyCommands {
+    /// Show Antigravity / Gemini usage limits
     Usage {
         /// Show the timezone name next to reset times
         #[arg(long)]
@@ -55,6 +72,9 @@ async fn main() {
             CodexCommands::Usage { show_timezone } => {
                 commands::codex_usage::run(show_timezone).await
             }
+        },
+        Commands::Agy { command } => match command {
+            AgyCommands::Usage { show_timezone } => commands::agy_usage::run(show_timezone).await,
         },
     }
 }
@@ -98,6 +118,18 @@ mod tests {
                 command: CodexCommands::Usage { show_timezone },
             } => assert!(show_timezone),
             _ => panic!("expected codex usage command"),
+        }
+    }
+
+    #[test]
+    fn agy_usage_parses_show_timezone() {
+        let cli = Cli::try_parse_from(["claudex", "agy", "usage", "--show-timezone"]).unwrap();
+
+        match cli.command {
+            Commands::Agy {
+                command: AgyCommands::Usage { show_timezone },
+            } => assert!(show_timezone),
+            _ => panic!("expected agy usage command"),
         }
     }
 }
