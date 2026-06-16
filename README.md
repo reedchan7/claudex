@@ -185,6 +185,19 @@ export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-..."
 claudex usage
 ```
 
+### Unavailable providers
+
+When a provider has no local session, has unreadable credentials, or rejects the saved token, claudex keeps the output structured and shows an empty usage bar with a short next step:
+
+```console
+Codex is not connected
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ unavailable
+No local Codex session was found on this machine.
+Next: Run `codex` and sign in with ChatGPT.
+```
+
+Single-provider commands exit non-zero when that provider is unavailable. `claudex usage --all` still renders the other providers and only exits non-zero when none of them can be shown.
+
 ## Development
 
 Common tasks are available through the `Makefile`:

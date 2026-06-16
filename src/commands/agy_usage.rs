@@ -3,6 +3,7 @@ use colored::Colorize;
 use terminal_size::{Width, terminal_size};
 
 use crate::agy::api::{QuotaSummaryBucket, UserQuotaSummaryResponse};
+use crate::commands::status::{self, Provider};
 
 const FILL_CHAR: char = '█';
 const EMPTY_CHAR: char = '░';
@@ -199,7 +200,7 @@ fn print_quota_summary(quota: &UserQuotaSummaryResponse, show_timezone: bool) {
 
 pub async fn run(show_timezone: bool) {
     if let Err(e) = render(show_timezone).await {
-        eprintln!("Error: {e}");
+        status::print_provider_error(Provider::Antigravity, &e);
         std::process::exit(1);
     }
 }

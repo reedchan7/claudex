@@ -3,6 +3,7 @@ use colored::Colorize;
 use terminal_size::{Width, terminal_size};
 
 use crate::codex::api::WindowSnapshot;
+use crate::commands::status::{self, Provider};
 
 const FILL_CHAR: char = '\u{2588}';
 const EMPTY_CHAR: char = '\u{2591}';
@@ -141,7 +142,7 @@ fn capitalize(s: &str) -> String {
 
 pub async fn run(show_timezone: bool) {
     if let Err(e) = render(show_timezone).await {
-        eprintln!("Error: {e}");
+        status::print_provider_error(Provider::Codex, &e);
         std::process::exit(1);
     }
 }

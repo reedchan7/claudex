@@ -3,6 +3,7 @@ use colored::Colorize;
 use terminal_size::{Width, terminal_size};
 
 use crate::api::{ExtraUsage, RateLimit};
+use crate::commands::status::{self, Provider};
 
 fn format_duration_short(seconds: i64) -> String {
     if seconds <= 0 {
@@ -155,7 +156,7 @@ fn print_extra_usage(extra: &ExtraUsage) {
 
 pub async fn run(show_timezone: bool) {
     if let Err(e) = render(show_timezone).await {
-        eprintln!("Error: {e}");
+        status::print_provider_error(Provider::Claude, &e);
         std::process::exit(1);
     }
 }

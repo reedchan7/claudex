@@ -1,6 +1,8 @@
 use colored::Colorize;
 use terminal_size::{Width, terminal_size};
 
+use crate::commands::status::{self, Provider};
+
 const RULE_CHAR: char = '\u{2501}'; // ━
 
 // Widest possible progress-bar line suffix: " 100.00% remaining".
@@ -30,28 +32,57 @@ fn print_header(title: &str, accent: (u8, u8, u8)) {
 
 pub async fn run(show_timezone: bool) {
     let mut had_error = false;
+    let mut rendered = 0;
 
     print_header("Claude Code", (217, 119, 87));
-    if let Err(e) = crate::commands::usage::render(show_timezone).await {
-        eprintln!("{} {e}", "Error:".red());
-        had_error = true;
+    match crate::commands::usage::render(show_timezone).await {
+        Ok(()) => rendered += 1,
+        Err(e) => {
+            status::print_provider_error(Provider::Claude, &e);
+            had_error = true;
+        }
     }
 
     println!();
     print_header("Codex", (16, 163, 127));
-    if let Err(e) = crate::commands::codex_usage::render(show_timezone).await {
-        eprintln!("{} {e}", "Error:".red());
-        had_error = true;
+    match crate::commands::codex_usage::render(show_timezone).await {
+        Ok(()) => rendered += 1,
+        Err(e) => {
+            status::print_provider_error(Provider::Codex, &e);
+            had_error = true;
+        }
     }
 
     println!();
     print_header("Antigravity", (66, 133, 244));
-    if let Err(e) = crate::commands::agy_usage::render(show_timezone).await {
-        eprintln!("{} {e}", "Error:".red());
-        had_error = true;
+    match crate::commands::agy_usage::render(show_timezone).await {
+        Ok(()) => rendered += 1,
+        Err(e) => {
+            status::print_provider_error(Provider::Antigravity, &e);
+            had_error = true;
+        }
     }
 
-    if had_error {
+    if should_exit_failure(rendered, had_error) {
         std::process::exit(1);
+    }
+}
+
+fn should_exit_failure(rendered: usize, had_error: bool) -> bool {
+    had_error && rendered == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_all_succeeds_when_at_least_one_provider_renders() {
+        assert!(!should_exit_failure(1, true));
+    }
+
+    #[test]
+    fn usage_all_fails_when_every_provider_is_unavailable() {
+        assert!(should_exit_failure(0, true));
     }
 }
