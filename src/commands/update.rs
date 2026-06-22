@@ -119,7 +119,7 @@ fn get_latest_version(agent: &Agent) -> Option<String> {
         LatestCmd::Pip(pkg) => {
             // Try `uv pip index versions <pkg>` first, fall back to `pip index versions <pkg>`.
             let output = run_quiet("uv", &["pip", "compile", "--dry-run", "-"])
-                .and_then(|_| None) // uv doesn't have a simple "latest" command
+                .and(None) // uv doesn't have a simple "latest" command
                 .or_else(|| {
                     // Use `pip index versions <pkg>` and parse "LATEST: x.y.z"
                     let raw = run_quiet("pip", &["index", "versions", pkg])?;
