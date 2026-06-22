@@ -162,12 +162,19 @@ pub async fn run(show_timezone: bool) {
 }
 
 pub async fn render(show_timezone: bool) -> Result<(), String> {
-    let token = crate::auth::read_token()?;
+    let session = crate::auth::read_oauth_session()?;
 
     let version = crate::auth::get_claude_version();
     let user_agent = format!("claude-code/{version}");
 
-    let utilization = crate::api::fetch_utilization(&token, &user_agent).await?;
+    let utilization = match crate::api::fetch_utilization(&session.access_token, &user_agent).await
+    {
+        Err(e) if e.to_ascii_lowercase().contains("authentication failed") => {
+            let refreshed = crate::auth::refresh_oauth_session(&session, &user_agent).await?;
+            crate::api::fetch_utilization(&refreshed.access_token, &user_agent).await?
+        }
+        other => other?,
+    };
 
     let limits: &[(&str, Option<&RateLimit>)] = &[
         ("Current session (5h)", utilization.five_hour.as_ref()),
