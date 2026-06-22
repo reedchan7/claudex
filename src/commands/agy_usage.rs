@@ -237,7 +237,7 @@ fn print_model_usage(quota: &UserQuotaSummaryResponse, show_timezone: bool) {
 
     println!();
     println!("{}", "─".repeat(section_width).dimmed());
-    println!("{}", "Model Usage (5H)".bold());
+    println!("{}", "Model Usage".bold());
     println!();
 
     for (index, tu) in tiers.iter().enumerate() {

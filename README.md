@@ -8,7 +8,7 @@ Four commands set the tone:
 
 - **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, Sonnet-only, and usage credits, all rendered as crisp colored bars in a single command.
 - **`claudex codex usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits.
-- **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and per-tier 5-hour usage from the same Google Code Assist quota APIs.
+- **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs.
 - **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi, Reasonix, Pi). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated.
 
 No interactive session, no digging through a web app — just run the command and you're done.
@@ -87,19 +87,11 @@ Five Hour Limit
 Refreshes 2:30pm, 2h 49m left
 
 ───────────────────────────────────────────────────────────────
-Model Usage (5H)
-
-Pro
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0.00% used
-Resets: 4:39pm, 4h 58m left
-
-Flash
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0.00% used
-Resets: 4:39pm, 4h 58m left
+Model Usage
 
 Claude Sonnet
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0.00% used
-Resets: 2:30pm, 2h 49m left
+██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 28.56% used
+Resets: Jun 23 at 9:30am, 6d 17h left
 ```
 
 Progress bars are colored by utilization: green below 50%, yellow from 50–80%, red at 80% and above.
@@ -124,9 +116,9 @@ It reads the access token from `~/.codex/auth.json` (written when you sign in wi
 
 ### `claudex agy usage` (Gemini / Antigravity)
 
-It reads Antigravity's Google OAuth access token from the system keyring (on macOS, Keychain service `gemini`, account `antigravity`), calls `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` for pooled quota groups, then uses `loadCodeAssist` plus `retrieveUserQuota` on `https://cloudcode-pa.googleapis.com/v1internal` for the model-level 5-hour buckets. If the token has expired, run `agy` once so Antigravity refreshes its saved session.
+It reads Antigravity's Google OAuth access token from the system keyring (on macOS, Keychain service `gemini`, account `antigravity`), calls `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` for pooled quota groups, then uses `loadCodeAssist` plus `retrieveUserQuota` on `https://cloudcode-pa.googleapis.com/v1internal` for model-level buckets when Google returns depleted model quota. If the token has expired, run `agy` once so Antigravity refreshes its saved session.
 
-The summary endpoint reports pooled quota groups. claudex keeps that shape, then adds a `Model Usage (5H)` section from real `modelId` buckets aggregated by tier:
+The summary endpoint reports pooled quota groups. claudex keeps that shape, then adds a `Model Usage` section from returned `modelId` buckets that are below full quota, aggregated by tier:
 
 - **Gemini Models** — Gemini Flash and Gemini Pro family usage.
 - **Claude and GPT models** — Claude Opus, Claude Sonnet, and GPT-OSS family usage.

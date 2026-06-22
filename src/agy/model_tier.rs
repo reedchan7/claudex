@@ -92,6 +92,9 @@ pub fn build_model_buckets(response: &UserQuotaSummaryResponse) -> Vec<ModelBuck
         let Some(remaining_fraction) = bucket.remaining_fraction else {
             continue;
         };
+        if remaining_fraction >= 1.0 {
+            continue;
+        }
         if !is_user_visible_model_id(model_id) {
             continue;
         }
@@ -298,7 +301,7 @@ mod tests {
                 },
                 {
                     "modelId": "gemini-3-flash-preview",
-                    "remainingFraction": 1.0,
+                    "remainingFraction": 0.99,
                     "resetTime": "2026-06-16T17:57:00Z"
                 }
             ]
@@ -335,7 +338,30 @@ mod tests {
                 },
                 {
                     "modelId": "claude-sonnet-4-6",
-                    "remainingFraction": 1.0
+                    "remainingFraction": 0.9
+                }
+            ]
+        }"#;
+        let response: UserQuotaSummaryResponse = serde_json::from_str(json).unwrap();
+        let buckets = build_model_buckets(&response);
+
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].tier, Tier::Other("Claude Sonnet".to_string()));
+    }
+
+    #[test]
+    fn test_build_model_buckets_skips_full_quota_rows() {
+        let json = r#"{
+            "buckets": [
+                {
+                    "modelId": "gemini-3.1-pro-high",
+                    "remainingFraction": 1.0,
+                    "resetTime": "2026-06-22T12:18:59Z"
+                },
+                {
+                    "modelId": "claude-sonnet-4-6",
+                    "remainingFraction": 0.33,
+                    "resetTime": "2026-06-23T01:30:12Z"
                 }
             ]
         }"#;
