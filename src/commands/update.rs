@@ -76,7 +76,7 @@ fn run_quiet(program: &str, args: &[&str]) -> Option<String> {
         .filter(|o| o.status.success())
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            (!s.is_empty()).then_some(s)
         })
 }
 
@@ -117,32 +117,23 @@ fn get_latest_version(agent: &Agent) -> Option<String> {
             extract_version(&output)
         }
         LatestCmd::Pip(pkg) => {
-            // Try `uv pip index versions <pkg>` first, fall back to `pip index versions <pkg>`.
-            let output = run_quiet("uv", &["pip", "compile", "--dry-run", "-"])
-                .and(None) // uv doesn't have a simple "latest" command
-                .or_else(|| {
-                    // Use `pip index versions <pkg>` and parse "LATEST: x.y.z"
-                    let raw = run_quiet("pip", &["index", "versions", pkg])?;
-                    for line in raw.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with("LATEST:") || trimmed.starts_with("Latest version:")
-                        {
-                            return extract_version(trimmed);
-                        }
-                    }
-                    // Fallback: try PyPI JSON API via curl
-                    None
+            // Try `pip index versions <pkg>` first, then fall back to PyPI JSON API.
+            let from_pip = run_quiet("pip", &["index", "versions", pkg]).and_then(|raw| {
+                raw.lines().find_map(|line| {
+                    let trimmed = line.trim();
+                    (trimmed.starts_with("LATEST:") || trimmed.starts_with("Latest version:"))
+                        .then(|| extract_version(trimmed))
+                        .flatten()
                 })
-                .or_else(|| {
-                    // Fallback: query PyPI JSON API
-                    let raw = run_quiet(
-                        "curl",
-                        &["-sf", &format!("https://pypi.org/pypi/{pkg}/json")],
-                    )?;
-                    // Parse {"info":{"version":"x.y.z",...},...}
-                    parse_pypi_version(&raw)
-                });
-            output
+            });
+            from_pip.or_else(|| {
+                // Fallback: query PyPI JSON API
+                let raw = run_quiet(
+                    "curl",
+                    &["-sf", &format!("https://pypi.org/pypi/{pkg}/json")],
+                )?;
+                parse_pypi_version(&raw)
+            })
         }
     }
 }
@@ -160,11 +151,7 @@ fn parse_pypi_version(json: &str) -> Option<String> {
     let after = after.strip_prefix('"')?;
     let end = after.find('"')?;
     let ver = &after[..end];
-    if ver.is_empty() {
-        None
-    } else {
-        Some(ver.to_string())
-    }
+    (!ver.is_empty()).then(|| ver.to_string())
 }
 
 fn do_update(agent: &Agent) -> bool {
@@ -177,7 +164,9 @@ fn do_update(agent: &Agent) -> bool {
             eprintln!(
                 "  {} update command exited with {}",
                 "✗".red(),
-                s.code().map(|c| c.to_string()).unwrap_or("signal".into())
+                s.code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".to_string())
             );
             false
         }
