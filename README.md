@@ -4,13 +4,14 @@
 
 **claudex** is a power-user companion for the `claude` command line — a growing toolkit of extra commands that make your Claude Code workflow faster, slicker, and more fun. Think of it as the "missing extras" pack for Claude Code.
 
-Three commands set the tone:
+Four commands set the tone:
 
 - **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, Sonnet-only, and usage credits, all rendered as crisp colored bars in a single command.
 - **`claudex codex usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits.
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and per-tier 5-hour usage from the same Google Code Assist quota APIs.
+- **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi, Reasonix, Pi). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated.
 
-No interactive session, no digging through a web app — just run the command and you're done. More commands are on the way.
+No interactive session, no digging through a web app — just run the command and you're done.
 
 > [!WARNING]
 > **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, or Google. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, and Gemini / Antigravity CLI already store locally, and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, and `cloudcode-pa.googleapis.com`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
@@ -132,6 +133,21 @@ The summary endpoint reports pooled quota groups. claudex keeps that shape, then
 
 Because the endpoints are account- and tier-aware, the exact groups, percentages, and refresh windows come from your current Antigravity session.
 
+### `claudex update`
+
+No credentials needed. claudex checks each agent's installed version (via `<agent> --version`) and compares it to the latest published version from the npm registry or PyPI. If an update is available, it runs the appropriate upgrade command:
+
+| Agent | Latest version source | Upgrade command |
+| --- | --- | --- |
+| claude | npm `@anthropic-ai/claude-code` | `claude update` |
+| codex | npm `@openai/codex` | `pnpm add -g @openai/codex` |
+| agy | PyPI `antigravity-cli` | `agy update` |
+| kimi | PyPI `kimi-cli` | `uv tool upgrade kimi-cli --no-cache` |
+| reasonix | npm `reasonix` | `pnpm add -g reasonix` |
+| pi | PyPI `pi-agent` | `pi update` |
+
+Agents that aren't installed are silently skipped. Pass one or more agent names to update only those.
+
 ## Requirements
 
 To **run** claudex (using a prebuilt binary), you only need:
@@ -189,6 +205,8 @@ claudex usage --all   # show Claude, Codex, and Gemini / Antigravity usage toget
 claudex usage --show-timezone       # include the timezone name in reset times
 claudex codex usage --show-timezone # include the timezone name for Codex usage
 claudex agy usage --show-timezone   # include the timezone name for Gemini / Antigravity usage
+claudex update                # update all coding agents
+claudex update claude codex   # update specific agents only
 claudex --help        # list available commands
 claudex --version     # print the version
 ```

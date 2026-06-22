@@ -35,6 +35,11 @@ enum Commands {
         #[command(subcommand)]
         command: AgyCommands,
     },
+    /// Update coding agents (claude, codex, agy, kimi, reasonix, pi)
+    Update {
+        /// Specific agent(s) to update. If omitted, checks all.
+        agents: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -76,6 +81,7 @@ async fn main() {
         Commands::Agy { command } => match command {
             AgyCommands::Usage { show_timezone } => commands::agy_usage::run(show_timezone).await,
         },
+        Commands::Update { agents } => commands::update::run(&agents),
     }
 }
 
