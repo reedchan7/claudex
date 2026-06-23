@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Used for the User-Agent when the installed `claude` version can't be detected.
 const FALLBACK_VERSION: &str = "2.1.150";
-const CLAUDE_CODE_CLIENT_ID: &str = "https://claude.ai/oauth/claude-code-client-metadata";
+const CLAUDE_CODE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_CODE_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
 
@@ -342,6 +342,14 @@ mod tests {
     #[test]
     fn test_parse_oauth_credentials_missing_field() {
         assert!(parse_oauth_credentials(r#"{"other": "value"}"#).is_err());
+    }
+
+    #[test]
+    fn test_refresh_uses_claude_code_registered_client_id() {
+        assert_eq!(
+            CLAUDE_CODE_CLIENT_ID,
+            "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+        );
     }
 
     #[test]
