@@ -21,6 +21,8 @@ struct OAuthCredentials {
     access_token: String,
     #[serde(rename = "refreshToken")]
     refresh_token: Option<String>,
+    #[serde(rename = "expiresAt")]
+    expires_at: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -34,7 +36,27 @@ enum OAuthSource {
 pub struct OAuthSession {
     pub access_token: String,
     refresh_token: Option<String>,
+    expires_at: Option<i64>,
     source: OAuthSource,
+}
+
+/// Refresh slightly before the recorded expiry so clock skew between this
+/// machine and Anthropic's servers doesn't strand a token the server already
+/// considers expired.
+const EXPIRY_SKEW_MILLIS: i64 = 60_000;
+
+impl OAuthSession {
+    /// Whether the saved access token is at or past its expiry. Tokens with no
+    /// known expiry (e.g. `CLAUDE_CODE_OAUTH_TOKEN`) are treated as not expired —
+    /// they can't be refreshed anyway. Used to decide whether a usage `401` is a
+    /// genuinely dead token (refresh) or a transient rejection (leave the shared
+    /// refresh token alone).
+    pub fn is_expired(&self) -> bool {
+        match (self.expires_at, current_time_millis().ok()) {
+            (Some(expires_at), Some(now)) => now >= expires_at - EXPIRY_SKEW_MILLIS,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -55,6 +77,7 @@ fn parse_oauth_session(json: &str, source: OAuthSource) -> Result<OAuthSession, 
     Ok(OAuthSession {
         access_token: creds.access_token,
         refresh_token: creds.refresh_token,
+        expires_at: creds.expires_at,
         source,
     })
 }
@@ -71,6 +94,7 @@ pub fn read_oauth_session() -> Result<OAuthSession, String> {
             return Ok(OAuthSession {
                 access_token: token.to_string(),
                 refresh_token: None,
+                expires_at: None,
                 source: OAuthSource::Env,
             });
         }
@@ -213,12 +237,18 @@ fn save_refreshed_session(
         }
     };
 
+    let expires_at = match refreshed.expires_in {
+        Some(secs) => current_time_millis().ok().map(|now| now + secs * 1000),
+        None => session.expires_at,
+    };
+
     Ok(OAuthSession {
         access_token: refreshed.access_token.clone(),
         refresh_token: refreshed
             .refresh_token
             .clone()
             .or_else(|| session.refresh_token.clone()),
+        expires_at,
         source,
     })
 }
@@ -342,6 +372,32 @@ mod tests {
     #[test]
     fn test_parse_oauth_credentials_missing_field() {
         assert!(parse_oauth_credentials(r#"{"other": "value"}"#).is_err());
+    }
+
+    fn session_expiring_at(expires_at: Option<i64>) -> OAuthSession {
+        OAuthSession {
+            access_token: "sk-ant-oat01-test".to_string(),
+            refresh_token: Some("sk-ant-ort01-test".to_string()),
+            expires_at,
+            source: OAuthSource::Env,
+        }
+    }
+
+    #[test]
+    fn test_is_expired_future_token_is_valid() {
+        let in_an_hour = current_time_millis().unwrap() + 3_600_000;
+        assert!(!session_expiring_at(Some(in_an_hour)).is_expired());
+    }
+
+    #[test]
+    fn test_is_expired_past_token_is_expired() {
+        let an_hour_ago = current_time_millis().unwrap() - 3_600_000;
+        assert!(session_expiring_at(Some(an_hour_ago)).is_expired());
+    }
+
+    #[test]
+    fn test_is_expired_unknown_expiry_is_not_expired() {
+        assert!(!session_expiring_at(None).is_expired());
     }
 
     #[test]

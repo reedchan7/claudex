@@ -167,14 +167,7 @@ pub async fn render(show_timezone: bool) -> Result<(), String> {
     let version = crate::auth::get_claude_version();
     let user_agent = format!("claude-code/{version}");
 
-    let utilization = match crate::api::fetch_utilization(&session.access_token, &user_agent).await
-    {
-        Err(e) if e.to_ascii_lowercase().contains("authentication failed") => {
-            let refreshed = crate::auth::refresh_oauth_session(&session, &user_agent).await?;
-            crate::api::fetch_utilization(&refreshed.access_token, &user_agent).await?
-        }
-        other => other?,
-    };
+    let utilization = fetch_utilization_with_recovery(session, &user_agent).await?;
 
     let limits: &[(&str, Option<&RateLimit>)] = &[
         ("Current session (5h)", utilization.five_hour.as_ref()),
@@ -210,10 +203,87 @@ pub async fn render(show_timezone: bool) -> Result<(), String> {
     Ok(())
 }
 
+fn is_auth_error(error: &str) -> bool {
+    error.to_ascii_lowercase().contains("authentication failed")
+}
+
+fn is_rate_limited(error: &str) -> bool {
+    error.contains("429")
+}
+
+/// Fetch usage, recovering when the usage endpoint rejects the access token.
+///
+/// A `401` there doesn't always mean the token is dead — the endpoint
+/// occasionally rejects a still-valid token. Because claudex shares its OAuth
+/// credentials with Claude Code (same keychain entry, same *rotating* refresh
+/// token), refreshing on every `401` races Claude Code's own refresh and gets
+/// rate-limited (`HTTP 429`). So we refresh only when the token has actually
+/// expired, and when a refresh is rate-limited we fall back to whatever token
+/// Claude Code may have just written to the credential store.
+async fn fetch_utilization_with_recovery(
+    session: crate::auth::OAuthSession,
+    user_agent: &str,
+) -> Result<crate::api::Utilization, String> {
+    match crate::api::fetch_utilization(&session.access_token, user_agent).await {
+        Ok(util) => return Ok(util),
+        Err(e) if is_auth_error(&e) => {}
+        Err(e) => return Err(e),
+    }
+
+    if session.is_expired() {
+        match crate::auth::refresh_oauth_session(&session, user_agent).await {
+            Ok(refreshed) => {
+                return crate::api::fetch_utilization(&refreshed.access_token, user_agent).await;
+            }
+            // A rate-limited refresh means Claude Code is refreshing the same
+            // token; fall through to pick up whatever it writes.
+            Err(e) if is_rate_limited(&e) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    recover_from_credential_store(&session.access_token, user_agent).await
+}
+
+/// Last resort after a rejected token: Claude Code owns token refresh and may
+/// have just written a fresher token to the shared credential store. Re-read it
+/// and retry once before surfacing a calm "retry shortly" message instead of a
+/// raw `429`.
+async fn recover_from_credential_store(
+    stale_token: &str,
+    user_agent: &str,
+) -> Result<crate::api::Utilization, String> {
+    if let Ok(session) = crate::auth::read_oauth_session()
+        && session.access_token != stale_token
+        && let Ok(util) = crate::api::fetch_utilization(&session.access_token, user_agent).await
+    {
+        return Ok(util);
+    }
+    Err("usage is temporarily unavailable — retry shortly".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn test_is_auth_error_matches_case_insensitively() {
+        assert!(is_auth_error(
+            "authentication failed — try restarting Claude Code"
+        ));
+        assert!(is_auth_error("Authentication Failed"));
+        assert!(!is_auth_error("failed to fetch usage data: HTTP 500"));
+    }
+
+    #[test]
+    fn test_is_rate_limited_detects_429() {
+        assert!(is_rate_limited(
+            "failed to refresh Claude Code session: HTTP 429 Too Many Requests"
+        ));
+        assert!(!is_rate_limited("authentication failed"));
+        assert!(!is_rate_limited("failed to fetch usage data: HTTP 500"));
+    }
 
     #[test]
     fn test_progress_bar_chars_26_percent() {
