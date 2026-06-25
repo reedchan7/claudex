@@ -8,6 +8,7 @@ pub enum Provider {
     Claude,
     Codex,
     Antigravity,
+    Glm,
 }
 
 pub struct ProviderStatus {
@@ -23,12 +24,14 @@ impl Provider {
             Provider::Claude => "Claude Code",
             Provider::Codex => "Codex",
             Provider::Antigravity => "Gemini / Antigravity",
+            Provider::Glm => "GLM / Z.ai",
         }
     }
 
     fn session_label(self) -> &'static str {
         match self {
             Provider::Antigravity => "Antigravity",
+            Provider::Glm => "GLM",
             _ => self.label(),
         }
     }
@@ -38,6 +41,7 @@ impl Provider {
             Provider::Claude => "Run `claude` and sign in, or set `CLAUDE_CODE_OAUTH_TOKEN`.",
             Provider::Codex => "Run `codex` and sign in with ChatGPT.",
             Provider::Antigravity => "Run `agy` and sign in with Google.",
+            Provider::Glm => "Sign in with ZCode, or set `GLM_API_KEY`.",
         }
     }
 
@@ -46,6 +50,7 @@ impl Provider {
             Provider::Claude => "Run `claude` and sign in again, then retry.",
             Provider::Codex => "Run `codex` and sign in again, then retry.",
             Provider::Antigravity => "Run `agy` and sign in with Google.",
+            Provider::Glm => "Sign in with ZCode again, or update `GLM_API_KEY`.",
         }
     }
 }
@@ -120,6 +125,7 @@ fn is_not_connected(provider: Provider, lower: &str) -> bool {
                 || lower.contains("auth.json has no tokens")
         }
         Provider::Antigravity => lower.contains("could not find antigravity credentials"),
+        Provider::Glm => lower.contains("could not find glm credentials"),
     }
 }
 
@@ -205,6 +211,26 @@ mod tests {
     #[test]
     fn antigravity_provider_label_names_both_surfaces() {
         assert_eq!(Provider::Antigravity.label(), "Gemini / Antigravity");
+    }
+
+    #[test]
+    fn classifies_missing_glm_credentials_as_not_connected() {
+        let status = status_for_error(
+            Provider::Glm,
+            "could not find GLM credentials — sign in with ZCode, or set GLM_API_KEY",
+        );
+
+        assert_eq!(status.heading, "GLM / Z.ai is not connected");
+        assert_eq!(
+            status.next_step,
+            "Sign in with ZCode, or set `GLM_API_KEY`."
+        );
+        assert!(status.details.is_none());
+    }
+
+    #[test]
+    fn glm_provider_label_names_both_surfaces() {
+        assert_eq!(Provider::Glm.label(), "GLM / Z.ai");
     }
 
     #[test]

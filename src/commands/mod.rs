@@ -1,5 +1,6 @@
 pub mod agy_usage;
 pub mod codex_usage;
+pub mod glm_usage;
 pub mod status;
 pub mod update;
 pub mod usage;

@@ -4,21 +4,22 @@
 
 **claudex** is a power-user companion for the `claude` command line — a growing toolkit of extra commands that make your Claude Code workflow faster, slicker, and more fun. Think of it as the "missing extras" pack for Claude Code.
 
-Four commands set the tone:
+A handful of commands set the tone:
 
 - **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, Sonnet-only, and usage credits, all rendered as crisp colored bars in a single command.
 - **`claudex codex usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits.
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs.
+- **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
 - **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi, Reasonix, Pi). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated.
 
 No interactive session, no digging through a web app — just run the command and you're done.
 
 > [!WARNING]
-> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, or Google. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, and Gemini / Antigravity CLI already store locally, and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, and `cloudcode-pa.googleapis.com`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
+> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, Google, or Z.ai / 智谱. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, and Gemini / Antigravity CLI already store locally — and, for GLM, the API key that ZCode stores locally (or `GLM_API_KEY`) — and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, `cloudcode-pa.googleapis.com`, and `api.z.ai` / `open.bigmodel.cn`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
 
 ## Example
 
-`claudex usage --all` shows everything at once — run `claudex usage`, `claudex codex usage`, or `claudex agy usage` on its own to see just that provider.
+`claudex usage --all` shows everything at once — run `claudex usage`, `claudex codex usage`, `claudex agy usage`, or `claudex glm usage` on its own to see just that provider.
 Reset times are shown in your local timezone. Add `--show-timezone` when you also want the timezone name in the output.
 
 ```console
@@ -92,6 +93,27 @@ Model Usage
 Claude Sonnet
 ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 28.56% used
 Resets: Jun 23 at 9:30am, 6d 17h left
+
+GLM / Z.ai
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Subscription: Pro
+
+Current session (5h)
+████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 8% used
+Resets Jun 26 at 2:12am, 4h 24m left
+
+Current week
+██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 4% used
+Resets Jul 2 at 10:42am, 6d 12h left
+
+MCP quota
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0% used
+Used 0 / 1000
+  search-prime: 0
+  web-reader: 0
+  zread: 0
+Resets Jul 25 at 10:42am, 29d 12h left
 ```
 
 Progress bars are colored by utilization: green below 50%, yellow from 50–80%, red at 80% and above.
@@ -125,6 +147,15 @@ The summary endpoint reports pooled quota groups. claudex keeps that shape, then
 
 Because the endpoints are account- and tier-aware, the exact groups, percentages, and refresh windows come from your current Antigravity session.
 
+### `claudex glm usage` (GLM / Z.ai / BigModel)
+
+It resolves the edition and API key without a dedicated GLM CLI:
+
+1. **Region** — `--cn` / `--global`, else `GLM_REGION` (`cn` / `global`), else ZCode's `providerFamilyDomain` from `~/.zcode/v2/setting.json` (`zai` → overseas, `bigmodel` → domestic), else overseas.
+2. **API key** — `GLM_API_KEY`, else the plaintext key ZCode stores in `~/.zcode/v2/config.json` for the matching coding-plan provider.
+
+It then calls `GET {base}/api/monitor/usage/quota/limit` (`https://api.z.ai` overseas, `https://open.bigmodel.cn` domestic) with `Authorization: Bearer <key>`, and renders the returned limits: the 5-hour session, the weekly window, and the MCP quota (with its per-tool breakdown). If you can sign in with ZCode, you can run `claudex glm usage`.
+
 ### `claudex update`
 
 No credentials needed. claudex checks each agent's installed version (via `<agent> --version`) and compares it to the latest published version from the npm registry or PyPI. If an update is available, it runs the appropriate upgrade command:
@@ -145,7 +176,7 @@ Agents that aren't installed are silently skipped. Pass one or more agent names 
 To **run** claudex (using a prebuilt binary), you only need:
 
 - **macOS or Linux** (x86_64 or arm64). Windows is best-effort — no prebuilt binary; build from source.
-- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, and/or an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, with an active subscription or quota.
+- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, and/or a **ZCode** sign-in (or `GLM_API_KEY`) for `claudex glm usage`, with an active subscription or quota.
 
 No Rust toolchain is required to run a prebuilt binary. Rust (edition 2024, so 1.85+) is only needed if you build from source.
 

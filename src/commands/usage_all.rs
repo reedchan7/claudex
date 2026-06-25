@@ -63,6 +63,16 @@ pub async fn run(show_timezone: bool) {
         }
     }
 
+    println!();
+    print_header(Provider::Glm.label(), (99, 102, 241));
+    match crate::commands::glm_usage::render(show_timezone, None).await {
+        Ok(()) => rendered += 1,
+        Err(e) => {
+            status::print_provider_error(Provider::Glm, &e);
+            had_error = true;
+        }
+    }
+
     if should_exit_failure(rendered, had_error) {
         std::process::exit(1);
     }
