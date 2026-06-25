@@ -28,8 +28,17 @@ struct OAuthCredentials {
 #[derive(Clone)]
 enum OAuthSource {
     Env,
-    Keychain { account: String, json: String },
-    File { path: PathBuf, json: String },
+    // Only constructed by the macOS keychain reader; on other platforms the
+    // variant still exists for `save_refreshed_session`'s match arm.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Keychain {
+        account: String,
+        json: String,
+    },
+    File {
+        path: PathBuf,
+        json: String,
+    },
 }
 
 #[derive(Clone)]

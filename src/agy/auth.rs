@@ -4,11 +4,16 @@ use std::process::Command;
 
 const FALLBACK_AGY_VERSION: &str = "1.0.8";
 
+// Keychain-credential types/helpers below are wired into production only by the
+// macOS reader, but the cross-platform unit tests exercise them — so on
+// non-macOS builds they're legitimately unused. Keep them, just don't warn.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, Deserialize)]
 struct AntigravityCredentials {
     token: AntigravityToken,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, Deserialize)]
 struct AntigravityToken {
     access_token: Option<String>,
@@ -52,6 +57,7 @@ fn read_access_token_from_keyring() -> Result<String, String> {
     )
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_access_token_from_keyring_secret(secret: &str) -> Result<String, String> {
     let json = keyring_secret_json(secret)?;
     let creds: AntigravityCredentials = serde_json::from_str(&json)
@@ -62,6 +68,7 @@ fn parse_access_token_from_keyring_secret(secret: &str) -> Result<String, String
         .ok_or("Antigravity keyring credentials have no usable access token".to_string())
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn keyring_secret_json(secret: &str) -> Result<String, String> {
     let secret = secret.trim();
     if let Some(encoded) = secret.strip_prefix("go-keyring-base64:") {
@@ -75,6 +82,7 @@ fn keyring_secret_json(secret: &str) -> Result<String, String> {
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|s| !s.is_empty())
 }
