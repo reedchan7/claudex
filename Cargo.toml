@@ -1,6 +1,6 @@
 [package]
 name = "claudex"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2024"
 description = "A CLI that extends the Claude Code CLI with extra commands, starting with `claudex usage` for plan usage limits."
 license = "MIT"
