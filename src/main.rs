@@ -47,6 +47,15 @@ enum Commands {
         /// Specific agent(s) to update. If omitted, checks all.
         agents: Vec<String>,
     },
+    /// Update claudex itself to the latest release
+    SelfUpdate {
+        /// Only check whether a newer version is available; don't install
+        #[arg(long)]
+        check: bool,
+        /// Reinstall even if already on the latest version
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -112,6 +121,7 @@ async fn main() {
             } => commands::glm_usage::run(show_timezone, region_override(cn, global)).await,
         },
         Commands::Update { agents } => commands::update::run(&agents),
+        Commands::SelfUpdate { check, force } => commands::self_update::run(check, force).await,
     }
 }
 

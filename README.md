@@ -11,6 +11,7 @@ A handful of commands set the tone:
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs.
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
 - **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi, Reasonix, Pi). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated.
+- **`claudex self-update`** — update claudex itself in place: it downloads the latest release binary for your platform, verifies its checksum, and swaps in the new one (falling back to the install script if anything goes wrong). No Rust toolchain needed.
 
 No interactive session, no digging through a web app — just run the command and you're done.
 
@@ -171,6 +172,10 @@ No credentials needed. claudex checks each agent's installed version (via `<agen
 
 Agents that aren't installed are silently skipped. Pass one or more agent names to update only those.
 
+### `claudex self-update`
+
+Updates claudex itself, not the agents above. It asks GitHub for the latest release, and if you're behind it downloads the prebuilt tarball for your platform, **verifies its sha256**, extracts it, and atomically replaces the running binary — no Rust toolchain required. A checksum mismatch aborts loudly; any other hiccup (network, extraction, a read-only install dir) falls back to the canonical `install.sh`. Pass `--check` to only report whether a newer version exists, or `--force` to reinstall the current version. Native self-update covers macOS and Linux (x86_64 / arm64); on Windows it points you at the releases page.
+
 ## Requirements
 
 To **run** claudex (using a prebuilt binary), you only need:
@@ -190,7 +195,7 @@ Download the right prebuilt binary for your platform and install it — no Rust 
 curl -fsSL https://raw.githubusercontent.com/reedchan7/claudex/main/install.sh | sh
 ```
 
-**The same command also upgrades.** Re-run it anytime: it detects an existing install, does nothing if you already have the latest version, and otherwise updates the binary you actually run, in place. Pass `CLAUDEX_FORCE=1` to reinstall even when you're already up to date.
+**The same command also upgrades.** Re-run it anytime: it detects an existing install, does nothing if you already have the latest version, and otherwise updates the binary you actually run, in place. Pass `CLAUDEX_FORCE=1` to reinstall even when you're already up to date. Once installed, `claudex self-update` does the same thing in place — with checksum verification — and falls back to this script if needed.
 
 A fresh install lands in `~/.local/bin` (override with `CLAUDEX_INSTALL_DIR`), creating the directory if needed. If that directory isn't on your `PATH`, the installer adds it to your shell profile (`.zshrc` / `.bashrc` / `.bash_profile` / fish config) automatically — restart your shell afterwards. Set `CLAUDEX_NO_MODIFY_PATH=1` to manage `PATH` yourself.
 
@@ -230,6 +235,8 @@ claudex codex usage --show-timezone # include the timezone name for Codex usage
 claudex agy usage --show-timezone   # include the timezone name for Gemini / Antigravity usage
 claudex update                # update all coding agents
 claudex update claude codex   # update specific agents only
+claudex self-update           # update claudex itself in place
+claudex self-update --check   # only check whether a newer claudex exists
 claudex --help        # list available commands
 claudex --version     # print the version
 ```
