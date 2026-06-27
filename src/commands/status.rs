@@ -97,6 +97,18 @@ pub fn status_for_error(provider: Provider, error: &str) -> ProviderStatus {
         };
     }
 
+    if lower.contains("429") || lower.contains("too many requests") || lower.contains("rate limit")
+    {
+        return ProviderStatus {
+            heading: format!("{label} refresh is rate limited"),
+            detail: format!(
+                "Anthropic rejected the {session_label} session refresh because it was retried too often."
+            ),
+            next_step: "Wait a few minutes, then retry `claudex usage`.".to_string(),
+            details: Some(error.to_string()),
+        };
+    }
+
     if looks_like_invalid_credentials(&lower) {
         return ProviderStatus {
             heading: format!("{label} credentials need repair"),
@@ -206,6 +218,28 @@ mod tests {
         assert_eq!(status.detail, "The saved Antigravity token was rejected.");
         assert_eq!(status.next_step, "Run `agy` and sign in with Google.");
         assert!(status.details.is_none());
+    }
+
+    #[test]
+    fn classifies_rate_limit_as_retry_later() {
+        let status = status_for_error(
+            Provider::Claude,
+            "failed to refresh Claude Code session: HTTP 429 Too Many Requests",
+        );
+
+        assert_eq!(status.heading, "Claude Code refresh is rate limited");
+        assert_eq!(
+            status.detail,
+            "Anthropic rejected the Claude Code session refresh because it was retried too often."
+        );
+        assert_eq!(
+            status.next_step,
+            "Wait a few minutes, then retry `claudex usage`."
+        );
+        assert_eq!(
+            status.details.as_deref(),
+            Some("failed to refresh Claude Code session: HTTP 429 Too Many Requests")
+        );
     }
 
     #[test]

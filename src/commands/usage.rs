@@ -235,23 +235,30 @@ async fn fetch_utilization_with_recovery(
             Ok(refreshed) => {
                 return crate::api::fetch_utilization(&refreshed.access_token, user_agent).await;
             }
-            // A rate-limited refresh means Claude Code is refreshing the same
-            // token; fall through to pick up whatever it writes.
-            Err(e) if is_rate_limited(&e) => {}
+            // A rate-limited refresh can mean Claude Code is refreshing the
+            // same token; fall through once, but preserve the real cause.
+            Err(e) if is_rate_limited(&e) => {
+                return recover_from_credential_store(
+                    &session.access_token,
+                    user_agent,
+                    Some(e.as_str()),
+                )
+                .await;
+            }
             Err(e) => return Err(e),
         }
     }
 
-    recover_from_credential_store(&session.access_token, user_agent).await
+    recover_from_credential_store(&session.access_token, user_agent, None).await
 }
 
 /// Last resort after a rejected token: Claude Code owns token refresh and may
 /// have just written a fresher token to the shared credential store. Re-read it
-/// and retry once before surfacing a calm "retry shortly" message instead of a
-/// raw `429`.
+/// and retry once before surfacing the original refresh failure if there was one.
 async fn recover_from_credential_store(
     stale_token: &str,
     user_agent: &str,
+    fallback_error: Option<&str>,
 ) -> Result<crate::api::Utilization, String> {
     if let Ok(session) = crate::auth::read_oauth_session()
         && session.access_token != stale_token
@@ -259,7 +266,9 @@ async fn recover_from_credential_store(
     {
         return Ok(util);
     }
-    Err("usage is temporarily unavailable — retry shortly".to_string())
+    Err(fallback_error
+        .unwrap_or("usage is temporarily unavailable — retry shortly")
+        .to_string())
 }
 
 #[cfg(test)]
@@ -283,6 +292,35 @@ mod tests {
         ));
         assert!(!is_rate_limited("authentication failed"));
         assert!(!is_rate_limited("failed to fetch usage data: HTTP 500"));
+    }
+
+    #[tokio::test]
+    async fn test_recovery_preserves_rate_limit_when_store_has_same_token() {
+        let previous = std::env::var_os("CLAUDE_CODE_OAUTH_TOKEN");
+        unsafe {
+            std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "stale-token");
+        }
+
+        let result = recover_from_credential_store(
+            "stale-token",
+            "claude-code/test",
+            Some("failed to refresh Claude Code session: HTTP 429 Too Many Requests"),
+        )
+        .await;
+
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", value);
+            },
+            None => unsafe {
+                std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+            },
+        }
+
+        assert_eq!(
+            result.unwrap_err(),
+            "failed to refresh Claude Code session: HTTP 429 Too Many Requests"
+        );
     }
 
     #[test]
