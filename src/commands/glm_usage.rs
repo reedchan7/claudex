@@ -162,7 +162,7 @@ pub async fn run(show_timezone: bool, region_override: Option<&str>) {
 
 pub async fn render(show_timezone: bool, region_override: Option<&str>) -> Result<(), String> {
     let creds = crate::glm::auth::resolve_credentials(region_override)?;
-    let usage = crate::glm::api::fetch_usage(creds.region.base_url(), &creds.api_key).await?;
+    let mut usage = crate::glm::api::fetch_usage(creds.region.base_url(), &creds.api_key).await?;
 
     if usage.limits.is_empty() {
         println!("GLM usage data is not available for your plan.");
@@ -177,6 +177,16 @@ pub async fn render(show_timezone: bool, region_override: Option<&str>) -> Resul
     {
         println!("{} {}\n", "Subscription:".bold(), capitalize(level));
     }
+
+    // Sort limits: Session limit first, then Week limit, then MCP quota, then others.
+    usage
+        .limits
+        .sort_by_key(|limit| match (limit.kind.as_deref(), limit.unit) {
+            (Some("TOKENS_LIMIT"), Some(3)) => 1,
+            (Some("TOKENS_LIMIT"), Some(6)) => 2,
+            (Some("TIME_LIMIT"), _) => 3,
+            _ => 4,
+        });
 
     for (index, limit) in usage.limits.iter().enumerate() {
         if index > 0 {
