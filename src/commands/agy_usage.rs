@@ -309,10 +309,28 @@ pub async fn run(show_timezone: bool) {
     }
 }
 
+fn is_auth_error(error: &str) -> bool {
+    error.to_ascii_lowercase().contains("authentication failed")
+}
+
+async fn fetch_quota_with_recovery(
+    session: crate::agy::auth::AntigravitySession,
+    user_agent: &str,
+) -> Result<UserQuotaSummaryResponse, String> {
+    match crate::agy::api::fetch_user_quota_summary(&session.access_token, user_agent).await {
+        Ok(quota) => Ok(quota),
+        Err(e) if is_auth_error(&e) => {
+            let refreshed = crate::agy::auth::refresh_session(&session, user_agent).await?;
+            crate::agy::api::fetch_user_quota_summary(&refreshed.access_token, user_agent).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
 pub async fn render(show_timezone: bool) -> Result<(), String> {
-    let access_token = crate::agy::auth::read_access_token().await?;
+    let session = crate::agy::auth::read_session().await?;
     let user_agent = crate::agy::auth::agy_user_agent();
-    let quota = crate::agy::api::fetch_user_quota_summary(&access_token, &user_agent).await?;
+    let quota = fetch_quota_with_recovery(session, &user_agent).await?;
 
     if !has_quota_data(&quota) {
         println!("Antigravity quota data is not available for your account.");
@@ -419,5 +437,15 @@ mod tests {
         assert_eq!(model_usage_bar_width(120), 50);
         assert_eq!(model_usage_bar_width(50), 40);
         assert_eq!(model_usage_bar_width(30), 20);
+    }
+
+    #[test]
+    fn test_is_auth_error_matches_antigravity_token_rejection() {
+        assert!(is_auth_error(
+            "authentication failed — try restarting Antigravity to refresh your Google login"
+        ));
+        assert!(!is_auth_error(
+            "failed to fetch Antigravity quota data: HTTP 500"
+        ));
     }
 }
