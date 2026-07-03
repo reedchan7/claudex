@@ -154,6 +154,60 @@ fn print_extra_usage(extra: &ExtraUsage) {
     }
 }
 
+fn format_subscription_type(value: &str) -> String {
+    let value = value.trim();
+    let mut chars = value.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+    }
+}
+
+fn format_rate_limit_tier(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let value = value
+        .strip_prefix("default_claude_")
+        .or_else(|| value.strip_prefix("claude_"))
+        .unwrap_or(value);
+
+    let label = value
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(format_rate_limit_tier_part)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    (!label.is_empty()).then_some(label)
+}
+
+fn format_rate_limit_tier_part(part: &str) -> String {
+    if part
+        .strip_suffix('x')
+        .is_some_and(|prefix| !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()))
+    {
+        return part.to_ascii_lowercase();
+    }
+
+    format_subscription_type(part)
+}
+
+fn format_subscription_label(
+    rate_limit_tier: Option<&str>,
+    subscription_type: Option<&str>,
+) -> Option<String> {
+    rate_limit_tier
+        .and_then(format_rate_limit_tier)
+        .or_else(|| {
+            subscription_type
+                .map(format_subscription_type)
+                .filter(|value| !value.is_empty())
+        })
+}
+
 fn limit_title(limit: &UsageLimit) -> Option<String> {
     match limit.kind.as_deref()? {
         "session" => Some("Current session (5h)".to_string()),
@@ -222,11 +276,19 @@ pub async fn run(show_timezone: bool) {
 
 pub async fn render(show_timezone: bool) -> Result<(), String> {
     let session = crate::auth::read_oauth_session()?;
+    let subscription = format_subscription_label(
+        session.rate_limit_tier.as_deref(),
+        session.subscription_type.as_deref(),
+    );
 
     let version = crate::auth::get_claude_version();
     let user_agent = format!("claude-code/{version}");
 
     let utilization = fetch_utilization_with_recovery(session, &user_agent).await?;
+
+    if let Some(subscription) = subscription {
+        println!("{} {}\n", "Subscription:".bold(), subscription);
+    }
 
     let printed = print_usage_limits(&utilization.limits, show_timezone)
         || print_legacy_limits(&utilization, show_timezone);
@@ -417,6 +479,35 @@ mod tests {
         };
 
         assert_eq!(limit_title(&limit).as_deref(), Some("Current week (Fable)"));
+    }
+
+    #[test]
+    fn test_format_subscription_type_capitalizes_saved_value() {
+        assert_eq!(format_subscription_type("max"), "Max");
+    }
+
+    #[test]
+    fn test_format_rate_limit_tier_formats_max_multiplier() {
+        assert_eq!(
+            format_rate_limit_tier("default_claude_max_20x").as_deref(),
+            Some("Max 20x")
+        );
+        assert_eq!(
+            format_rate_limit_tier("default_claude_max_5x").as_deref(),
+            Some("Max 5x")
+        );
+    }
+
+    #[test]
+    fn test_format_subscription_label_prefers_rate_limit_tier() {
+        assert_eq!(
+            format_subscription_label(Some("default_claude_max_20x"), Some("max")).as_deref(),
+            Some("Max 20x")
+        );
+        assert_eq!(
+            format_subscription_label(None, Some("max")).as_deref(),
+            Some("Max")
+        );
     }
 
     #[test]

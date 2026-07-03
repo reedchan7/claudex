@@ -337,6 +337,10 @@ pub async fn render(show_timezone: bool) -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(subscription) = quota.subscription.as_deref() {
+        println!("{} {}\n", "Subscription:".bold(), subscription);
+    }
+
     print_quota_summary(&quota, show_timezone);
     print_model_usage(&quota, show_timezone);
     Ok(())

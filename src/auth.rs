@@ -23,6 +23,10 @@ struct OAuthCredentials {
     refresh_token: Option<String>,
     #[serde(rename = "expiresAt")]
     expires_at: Option<i64>,
+    #[serde(rename = "subscriptionType")]
+    subscription_type: Option<String>,
+    #[serde(rename = "rateLimitTier")]
+    rate_limit_tier: Option<String>,
 }
 
 #[derive(Clone)]
@@ -44,6 +48,8 @@ enum OAuthSource {
 #[derive(Clone)]
 pub struct OAuthSession {
     pub access_token: String,
+    pub subscription_type: Option<String>,
+    pub rate_limit_tier: Option<String>,
     refresh_token: Option<String>,
     expires_at: Option<i64>,
     source: OAuthSource,
@@ -85,6 +91,8 @@ fn parse_oauth_session(json: &str, source: OAuthSource) -> Result<OAuthSession, 
     let creds = parse_oauth_credentials(json)?;
     Ok(OAuthSession {
         access_token: creds.access_token,
+        subscription_type: creds.subscription_type,
+        rate_limit_tier: creds.rate_limit_tier,
         refresh_token: creds.refresh_token,
         expires_at: creds.expires_at,
         source,
@@ -102,6 +110,8 @@ pub fn read_oauth_session() -> Result<OAuthSession, String> {
         if !token.is_empty() {
             return Ok(OAuthSession {
                 access_token: token.to_string(),
+                subscription_type: None,
+                rate_limit_tier: None,
                 refresh_token: None,
                 expires_at: None,
                 source: OAuthSource::Env,
@@ -253,6 +263,8 @@ fn save_refreshed_session(
 
     Ok(OAuthSession {
         access_token: refreshed.access_token.clone(),
+        subscription_type: session.subscription_type.clone(),
+        rate_limit_tier: session.rate_limit_tier.clone(),
         refresh_token: refreshed
             .refresh_token
             .clone()
@@ -386,6 +398,8 @@ mod tests {
     fn session_expiring_at(expires_at: Option<i64>) -> OAuthSession {
         OAuthSession {
             access_token: "sk-ant-oat01-test".to_string(),
+            subscription_type: None,
+            rate_limit_tier: None,
             refresh_token: Some("sk-ant-ort01-test".to_string()),
             expires_at,
             source: OAuthSource::Env,
@@ -458,6 +472,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_oauth_session_reads_subscription_type() {
+        let session = parse_oauth_session(
+            r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","subscriptionType":"max"}}"#,
+            OAuthSource::Env,
+        )
+        .unwrap();
+
+        assert_eq!(session.subscription_type.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn test_parse_oauth_session_reads_rate_limit_tier() {
+        let session = parse_oauth_session(
+            r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","rateLimitTier":"default_claude_max_20x"}}"#,
+            OAuthSource::Env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            session.rate_limit_tier.as_deref(),
+            Some("default_claude_max_20x")
+        );
+    }
+
+    #[test]
     fn test_read_session_from_file_missing() {
         let path = Path::new("/nonexistent/claudex/.credentials.json");
         assert!(read_session_from_file(path).is_err());
@@ -471,7 +510,8 @@ mod tests {
                 "accessToken": "old-access",
                 "refreshToken": "old-refresh",
                 "expiresAt": 1000,
-                "subscriptionType": "max"
+                "subscriptionType": "max",
+                "rateLimitTier": "default_claude_max_20x"
             }
         }"#;
         let refreshed = TokenRefresh {
@@ -489,6 +529,10 @@ mod tests {
         assert_eq!(value["claudeAiOauth"]["refreshToken"], "new-refresh");
         assert_eq!(value["claudeAiOauth"]["expiresAt"], 1_700_003_600_000_i64);
         assert_eq!(value["claudeAiOauth"]["subscriptionType"], "max");
+        assert_eq!(
+            value["claudeAiOauth"]["rateLimitTier"],
+            "default_claude_max_20x"
+        );
     }
 
     #[test]

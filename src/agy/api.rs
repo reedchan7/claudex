@@ -14,6 +14,8 @@ pub struct UserQuotaSummaryResponse {
     pub buckets: Vec<QuotaSummaryBucket>,
     #[serde(default)]
     pub groups: Vec<QuotaSummaryGroup>,
+    #[serde(skip)]
+    pub subscription: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +42,19 @@ pub struct QuotaSummaryBucket {
 #[serde(rename_all = "camelCase")]
 struct LoadCodeAssistResponse {
     cloudaicompanion_project: Option<String>,
+    current_tier: Option<CodeAssistTier>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeAssistTier {
+    id: Option<String>,
+    name: Option<String>,
+}
+
+struct CodeAssistContext {
+    project: Option<String>,
+    subscription: Option<String>,
 }
 
 pub async fn fetch_user_quota_summary(
@@ -62,10 +77,15 @@ pub async fn fetch_user_quota_summary(
     )
     .await?;
 
-    if let Ok(model_buckets) = fetch_model_quota_buckets(&client, access_token, user_agent).await
-        && !model_buckets.is_empty()
-    {
-        quota.buckets.extend(model_buckets);
+    if let Ok(context) = fetch_code_assist_context(&client, access_token, user_agent).await {
+        quota.subscription = context.subscription;
+        if let Some(project) = context.project
+            && let Ok(model_buckets) =
+                fetch_model_quota_buckets(&client, access_token, user_agent, &project).await
+            && !model_buckets.is_empty()
+        {
+            quota.buckets.extend(model_buckets);
+        }
     }
 
     Ok(quota)
@@ -75,17 +95,14 @@ async fn fetch_model_quota_buckets(
     client: &reqwest::Client,
     access_token: &str,
     user_agent: &str,
+    project: &str,
 ) -> Result<Vec<QuotaSummaryBucket>, String> {
-    let Some(project) = fetch_code_assist_project(client, access_token, user_agent).await? else {
-        return Ok(Vec::new());
-    };
-
     let quota: UserQuotaSummaryResponse = post_json(
         client,
         MODEL_QUOTA_URL,
         access_token,
         user_agent,
-        model_quota_request_body(&project),
+        model_quota_request_body(project),
         "failed to fetch Antigravity model quota data",
         "failed to parse Antigravity model quota data",
     )
@@ -94,11 +111,11 @@ async fn fetch_model_quota_buckets(
     Ok(quota.buckets)
 }
 
-async fn fetch_code_assist_project(
+async fn fetch_code_assist_context(
     client: &reqwest::Client,
     access_token: &str,
     user_agent: &str,
-) -> Result<Option<String>, String> {
+) -> Result<CodeAssistContext, String> {
     let response: LoadCodeAssistResponse = post_json(
         client,
         LOAD_CODE_ASSIST_URL,
@@ -110,10 +127,21 @@ async fn fetch_code_assist_project(
     )
     .await?;
 
-    Ok(response
+    let project = response
         .cloudaicompanion_project
         .map(|project| project.trim().to_string())
-        .filter(|project| !project.is_empty()))
+        .filter(|project| !project.is_empty());
+    let subscription = response.current_tier.and_then(|tier| {
+        tier.name
+            .or(tier.id)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    });
+
+    Ok(CodeAssistContext {
+        project,
+        subscription,
+    })
 }
 
 async fn post_json<T>(
@@ -275,6 +303,26 @@ mod tests {
         assert_eq!(
             response.cloudaicompanion_project.as_deref(),
             Some("projects/example")
+        );
+    }
+
+    #[test]
+    fn test_deserialize_load_code_assist_current_tier() {
+        let json = r#"{
+            "currentTier": {
+                "id": "standard-tier",
+                "name": "Antigravity"
+            }
+        }"#;
+
+        let response: LoadCodeAssistResponse = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            response
+                .current_tier
+                .as_ref()
+                .and_then(|tier| tier.name.as_deref()),
+            Some("Antigravity")
         );
     }
 
