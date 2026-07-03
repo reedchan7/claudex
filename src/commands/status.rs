@@ -9,6 +9,7 @@ pub enum Provider {
     Codex,
     Antigravity,
     Glm,
+    Kimi,
 }
 
 pub struct ProviderStatus {
@@ -25,6 +26,7 @@ impl Provider {
             Provider::Codex => "Codex",
             Provider::Antigravity => "Gemini / Antigravity",
             Provider::Glm => "GLM / Z.ai",
+            Provider::Kimi => "Kimi Code",
         }
     }
 
@@ -42,6 +44,7 @@ impl Provider {
             Provider::Codex => "Run `codex` and sign in with ChatGPT.",
             Provider::Antigravity => "Run `agy` and sign in with Google.",
             Provider::Glm => "Sign in with ZCode, or set `GLM_API_KEY`.",
+            Provider::Kimi => "Run `kimi login` and sign in with Kimi Code.",
         }
     }
 
@@ -51,6 +54,7 @@ impl Provider {
             Provider::Codex => "Run `codex` and sign in again, then retry.",
             Provider::Antigravity => "Run `agy` and sign in with Google.",
             Provider::Glm => "Sign in with ZCode again, or update `GLM_API_KEY`.",
+            Provider::Kimi => "Run `kimi login` and sign in again.",
         }
     }
 }
@@ -138,6 +142,10 @@ fn is_not_connected(provider: Provider, lower: &str) -> bool {
         }
         Provider::Antigravity => lower.contains("could not find antigravity credentials"),
         Provider::Glm => lower.contains("could not find glm credentials"),
+        Provider::Kimi => {
+            lower.contains("could not find kimi code credentials")
+                || lower.contains("kimi code credentials have no access token")
+        }
     }
 }
 
@@ -265,6 +273,21 @@ mod tests {
     #[test]
     fn glm_provider_label_names_both_surfaces() {
         assert_eq!(Provider::Glm.label(), "GLM / Z.ai");
+    }
+
+    #[test]
+    fn classifies_missing_kimi_credentials_as_not_connected() {
+        let status = status_for_error(
+            Provider::Kimi,
+            "could not find Kimi Code credentials at /tmp/kimi-code.json — run `kimi login`",
+        );
+
+        assert_eq!(status.heading, "Kimi Code is not connected");
+        assert_eq!(
+            status.next_step,
+            "Run `kimi login` and sign in with Kimi Code."
+        );
+        assert!(status.details.is_none());
     }
 
     #[test]

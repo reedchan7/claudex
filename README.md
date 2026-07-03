@@ -8,19 +8,20 @@ A handful of commands set the tone:
 
 - **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, model-specific limits, and usage credits, all rendered as crisp colored bars in a single command.
 - **`claudex codex usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits.
+- **`claudex kimi usage`** — show your Kimi Code plan usage from the same managed usage endpoint Kimi Code uses: weekly budget plus the rolling 5-hour limit.
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs.
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
-- **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi, Reasonix, Pi). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated.
+- **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi Code, Reasonix, Pi). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated.
 - **`claudex self-update`** — update claudex itself in place: it downloads the latest release binary for your platform, verifies its checksum, and swaps in the new one (falling back to the install script if anything goes wrong). No Rust toolchain needed.
 
 No interactive session, no digging through a web app — just run the command and you're done.
 
 > [!WARNING]
-> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, Google, or Z.ai / 智谱. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, and Gemini / Antigravity CLI already store locally — and, for GLM, the API key that ZCode stores locally (or `GLM_API_KEY`) — and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, `cloudcode-pa.googleapis.com`, and `api.z.ai` / `open.bigmodel.cn`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
+> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, Google, Moonshot AI / Kimi, or Z.ai / 智谱. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, Kimi Code, and Gemini / Antigravity CLI already store locally — and, for GLM, the API key that ZCode stores locally (or `GLM_API_KEY`) — and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, `api.kimi.com`, `cloudcode-pa.googleapis.com`, and `api.z.ai` / `open.bigmodel.cn`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
 
 ## Example
 
-`claudex usage --all` shows everything at once — run `claudex usage`, `claudex codex usage`, `claudex agy usage`, or `claudex glm usage` on its own to see just that provider.
+`claudex usage --all` shows everything at once — run `claudex usage`, `claudex codex usage`, `claudex kimi usage`, `claudex agy usage`, or `claudex glm usage` on its own to see just that provider.
 Reset times are shown in your local timezone. Add `--show-timezone` when you also want the timezone name in the output.
 
 ```console
@@ -62,6 +63,17 @@ Resets 6:44pm, 5h left
 GPT-5.3-Codex-Spark — Current week
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0% used
 Resets Jun 6 at 1:44pm, 7d left
+
+Kimi Code
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Weekly limit
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0% used
+Used 0 / 100; resets in 6d 23h
+
+5h limit
+█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 1% used
+Used 1 / 100; resets in 4h 45m
 
 Gemini / Antigravity
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -137,6 +149,10 @@ It then detects your installed `claude` version (via `claude --version`) to send
 
 It reads the access token from `~/.codex/auth.json` (written when you sign in with the Codex CLI — run `codex`), sends a `codex-cli` `User-Agent` plus your `ChatGPT-Account-Id`, calls `GET https://chatgpt.com/backend-api/wham/usage`, and renders the response. If you can run `codex`, you can run `claudex codex usage`.
 
+### `claudex kimi usage` (Kimi Code)
+
+It reads the Kimi Code OAuth access token from `~/.kimi-code/credentials/kimi-code.json` (falling back to the legacy `~/.kimi/credentials/kimi-code.json`), calls `GET https://api.kimi.com/coding/v1/usages` with `Authorization: Bearer <token>`, and renders the weekly budget plus rolling limits returned by Kimi Code. If you can run `kimi usage`, you can run `claudex kimi usage`.
+
 ### `claudex agy usage` (Gemini / Antigravity)
 
 It reads Antigravity's Google OAuth access token from the system keyring (on macOS, Keychain service `gemini`, account `antigravity`), calls `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` for pooled quota groups, then uses `loadCodeAssist` plus `retrieveUserQuota` on `https://cloudcode-pa.googleapis.com/v1internal` for model-level buckets when Google returns depleted model quota. If the token has expired, run `agy` once so Antigravity refreshes its saved session.
@@ -166,7 +182,7 @@ No credentials needed. claudex checks each agent's installed version (via `<agen
 | claude | npm `@anthropic-ai/claude-code` | `claude update` |
 | codex | npm `@openai/codex` | `pnpm add -g @openai/codex` |
 | agy | PyPI `antigravity-cli` | `agy update` |
-| kimi | PyPI `kimi-cli` | `uv tool upgrade kimi-cli --no-cache` |
+| kimi | npm `@moonshot-ai/kimi-code` | `kimi upgrade` |
 | reasonix | npm `reasonix` | `pnpm add -g reasonix` |
 | pi | PyPI `pi-agent` | `pi update` |
 
@@ -181,7 +197,7 @@ Updates claudex itself, not the agents above. It asks GitHub for the latest rele
 To **run** claudex (using a prebuilt binary), you only need:
 
 - **macOS or Linux** (x86_64 or arm64). Windows is best-effort — no prebuilt binary; build from source.
-- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, and/or a **ZCode** sign-in (or `GLM_API_KEY`) for `claudex glm usage`, with an active subscription or quota.
+- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, an authenticated **Kimi Code** install for `claudex kimi usage`, an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, and/or a **ZCode** sign-in (or `GLM_API_KEY`) for `claudex glm usage`, with an active subscription or quota.
 
 No Rust toolchain is required to run a prebuilt binary. Rust (edition 2024, so 1.85+) is only needed if you build from source.
 

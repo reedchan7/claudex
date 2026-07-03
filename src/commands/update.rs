@@ -26,10 +26,10 @@ const AGENTS: &[Agent] = &[
     },
     Agent {
         name: "kimi",
-        display: "Kimi CLI",
+        display: "Kimi Code",
         version_cmd: &["kimi", "--version"],
-        latest_cmd: LatestCmd::Pip("kimi-cli"),
-        update_cmd: &["uv", "tool", "upgrade", "kimi-cli", "--no-cache"],
+        latest_cmd: LatestCmd::Npm("@moonshot-ai/kimi-code"),
+        update_cmd: &["kimi", "upgrade"],
     },
     Agent {
         name: "reasonix",
@@ -313,6 +313,18 @@ mod tests {
         for a in AGENTS {
             assert!(!a.update_cmd.is_empty());
         }
+    }
+
+    #[test]
+    fn kimi_uses_kimi_code_metadata() {
+        let kimi = AGENTS.iter().find(|a| a.name == "kimi").unwrap();
+        assert_eq!(kimi.display, "Kimi Code");
+        assert_eq!(kimi.version_cmd, &["kimi", "--version"]);
+        assert!(matches!(
+            kimi.latest_cmd,
+            LatestCmd::Npm("@moonshot-ai/kimi-code")
+        ));
+        assert_eq!(kimi.update_cmd, &["kimi", "upgrade"]);
     }
 
     #[test]

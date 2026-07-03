@@ -4,6 +4,7 @@ mod auth;
 mod codex;
 mod commands;
 mod glm;
+mod kimi;
 
 use clap::{Parser, Subcommand};
 
@@ -18,7 +19,7 @@ struct Cli {
 enum Commands {
     /// Show Claude plan usage limits
     Usage {
-        /// Show Claude Code, Codex, and Gemini / Antigravity usage limits
+        /// Show Claude Code, Codex, Kimi Code, Gemini / Antigravity, and GLM usage limits
         #[arg(long)]
         all: bool,
         /// Show the timezone name next to reset times
@@ -41,6 +42,11 @@ enum Commands {
     Glm {
         #[command(subcommand)]
         command: GlmCommands,
+    },
+    /// Kimi Code commands
+    Kimi {
+        #[command(subcommand)]
+        command: KimiCommands,
     },
     /// Update coding agents (claude, codex, agy, kimi, reasonix, pi)
     Update {
@@ -94,6 +100,16 @@ enum GlmCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum KimiCommands {
+    /// Show Kimi Code plan usage limits
+    Usage {
+        /// Accepted for consistency with other usage commands
+        #[arg(long)]
+        show_timezone: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -119,6 +135,9 @@ async fn main() {
                 cn,
                 global,
             } => commands::glm_usage::run(show_timezone, region_override(cn, global)).await,
+        },
+        Commands::Kimi { command } => match command {
+            KimiCommands::Usage { show_timezone } => commands::kimi_usage::run(show_timezone).await,
         },
         Commands::Update { agents } => commands::update::run(&agents),
         Commands::SelfUpdate { check, force } => commands::self_update::run(check, force).await,
@@ -222,6 +241,18 @@ mod tests {
                 assert!(!global);
             }
             _ => panic!("expected glm usage command via zai alias"),
+        }
+    }
+
+    #[test]
+    fn kimi_usage_parses_show_timezone() {
+        let cli = Cli::try_parse_from(["claudex", "kimi", "usage", "--show-timezone"]).unwrap();
+
+        match cli.command {
+            Commands::Kimi {
+                command: KimiCommands::Usage { show_timezone },
+            } => assert!(show_timezone),
+            _ => panic!("expected kimi usage command"),
         }
     }
 

@@ -54,6 +54,16 @@ pub async fn run(show_timezone: bool) {
     }
 
     println!();
+    print_header(Provider::Kimi.label(), (37, 190, 191));
+    match crate::commands::kimi_usage::render(show_timezone).await {
+        Ok(()) => rendered += 1,
+        Err(e) => {
+            status::print_provider_error(Provider::Kimi, &e);
+            had_error = true;
+        }
+    }
+
+    println!();
     print_header(Provider::Antigravity.label(), (66, 133, 244));
     match crate::commands::agy_usage::render(show_timezone).await {
         Ok(()) => rendered += 1,
