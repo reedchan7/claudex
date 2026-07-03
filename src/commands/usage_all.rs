@@ -4,6 +4,14 @@ use terminal_size::{Width, terminal_size};
 use crate::commands::status::{self, Provider};
 
 const RULE_CHAR: char = '\u{2501}'; // ━
+const PROVIDER_COUNT: usize = 5;
+const PROVIDER_ORDER: [Provider; PROVIDER_COUNT] = [
+    Provider::Claude,
+    Provider::Codex,
+    Provider::Antigravity,
+    Provider::Glm,
+    Provider::Kimi,
+];
 
 // Widest possible progress-bar line suffix: " 100.00% used".
 const PCT_SUFFIX_WIDTH: usize = 18;
@@ -30,56 +38,43 @@ fn print_header(title: &str, accent: (u8, u8, u8)) {
     println!();
 }
 
+fn provider_accent(provider: Provider) -> (u8, u8, u8) {
+    match provider {
+        Provider::Claude => (217, 119, 87),
+        Provider::Codex => (16, 163, 127),
+        Provider::Antigravity => (66, 133, 244),
+        Provider::Glm => (99, 102, 241),
+        Provider::Kimi => (37, 190, 191),
+    }
+}
+
+fn provider_gap(index: usize) -> &'static str {
+    if index == 0 { "" } else { "\n\n" }
+}
+
+async fn render_provider(provider: Provider, show_timezone: bool) -> Result<(), String> {
+    match provider {
+        Provider::Claude => crate::commands::usage::render(show_timezone).await,
+        Provider::Codex => crate::commands::codex_usage::render(show_timezone).await,
+        Provider::Antigravity => crate::commands::agy_usage::render(show_timezone).await,
+        Provider::Glm => crate::commands::glm_usage::render(show_timezone, None).await,
+        Provider::Kimi => crate::commands::kimi_usage::render(show_timezone).await,
+    }
+}
+
 pub async fn run(show_timezone: bool) {
     let mut had_error = false;
     let mut rendered = 0;
 
-    print_header("Claude Code", (217, 119, 87));
-    match crate::commands::usage::render(show_timezone).await {
-        Ok(()) => rendered += 1,
-        Err(e) => {
-            status::print_provider_error(Provider::Claude, &e);
-            had_error = true;
-        }
-    }
-
-    println!();
-    print_header("Codex", (16, 163, 127));
-    match crate::commands::codex_usage::render(show_timezone).await {
-        Ok(()) => rendered += 1,
-        Err(e) => {
-            status::print_provider_error(Provider::Codex, &e);
-            had_error = true;
-        }
-    }
-
-    println!();
-    print_header(Provider::Kimi.label(), (37, 190, 191));
-    match crate::commands::kimi_usage::render(show_timezone).await {
-        Ok(()) => rendered += 1,
-        Err(e) => {
-            status::print_provider_error(Provider::Kimi, &e);
-            had_error = true;
-        }
-    }
-
-    println!();
-    print_header(Provider::Antigravity.label(), (66, 133, 244));
-    match crate::commands::agy_usage::render(show_timezone).await {
-        Ok(()) => rendered += 1,
-        Err(e) => {
-            status::print_provider_error(Provider::Antigravity, &e);
-            had_error = true;
-        }
-    }
-
-    println!();
-    print_header(Provider::Glm.label(), (99, 102, 241));
-    match crate::commands::glm_usage::render(show_timezone, None).await {
-        Ok(()) => rendered += 1,
-        Err(e) => {
-            status::print_provider_error(Provider::Glm, &e);
-            had_error = true;
+    for (index, provider) in PROVIDER_ORDER.iter().copied().enumerate() {
+        print!("{}", provider_gap(index));
+        print_header(provider.label(), provider_accent(provider));
+        match render_provider(provider, show_timezone).await {
+            Ok(()) => rendered += 1,
+            Err(e) => {
+                status::print_provider_error(provider, &e);
+                had_error = true;
+            }
         }
     }
 
@@ -104,5 +99,25 @@ mod tests {
     #[test]
     fn usage_all_fails_when_every_provider_is_unavailable() {
         assert!(should_exit_failure(0, true));
+    }
+
+    #[test]
+    fn provider_order_places_kimi_after_glm() {
+        assert_eq!(
+            PROVIDER_ORDER.map(Provider::label),
+            [
+                "Claude Code",
+                "Codex",
+                "Gemini / Antigravity",
+                "GLM / Z.ai",
+                "Kimi Code",
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_gap_adds_a_blank_line_between_agents() {
+        assert_eq!(provider_gap(0), "");
+        assert_eq!(provider_gap(1), "\n\n");
     }
 }
