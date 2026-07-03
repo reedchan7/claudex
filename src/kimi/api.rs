@@ -104,14 +104,47 @@ fn parse_managed_usage_payload(payload: &Value) -> ManagedUsage {
 }
 
 fn subscription_label(record: &Map<String, Value>) -> Option<String> {
+    plan_from_kimi_code_credits(record).or_else(|| {
+        first_string(record, &["subscription", "plan"])
+            .map(plan_label)
+            .filter(|label| !label.is_empty())
+    })
+}
+
+fn plan_from_kimi_code_credits(record: &Map<String, Value>) -> Option<String> {
+    let limit = record
+        .get("parallel")
+        .and_then(Value::as_object)
+        .and_then(|parallel| to_int(parallel.get("limit")))?;
+
+    match limit {
+        1 => Some("Andante".to_string()),
+        4 => Some("Moderato".to_string()),
+        20 => Some("Allegretto".to_string()),
+        60 => Some("Allegro".to_string()),
+        _ => None,
+    }
+}
+
+fn plan_label(value: &str) -> String {
+    match value {
+        "ANDANTE" | "LEVEL_ANDANTE" => "Andante".to_string(),
+        "MODERATO" | "LEVEL_MODERATO" => "Moderato".to_string(),
+        "ALLEGRETTO" | "LEVEL_ALLEGRETTO" => "Allegretto".to_string(),
+        "ALLEGRO" | "LEVEL_ALLEGRO" => "Allegro".to_string(),
+        _ => enum_label(value),
+    }
+}
+
+#[cfg(test)]
+fn membership_level(record: &Map<String, Value>) -> Option<String> {
     let raw = record
         .get("user")
         .and_then(Value::as_object)
         .and_then(|user| user.get("membership"))
         .and_then(Value::as_object)
         .and_then(|membership| membership.get("level"))
-        .and_then(Value::as_str)
-        .or_else(|| first_string(record, &["subscription", "plan", "subType"]))?;
+        .and_then(Value::as_str)?;
 
     Some(enum_label(raw))
 }
@@ -312,6 +345,7 @@ mod tests {
         let payload: Value = serde_json::from_str(
             r#"{
                 "user": { "membership": { "level": "LEVEL_INTERMEDIATE" } },
+                "parallel": { "limit": "20" },
                 "usage": {
                     "limit": "100",
                     "remaining": "98",
@@ -334,7 +368,7 @@ mod tests {
 
         let usage = parse_managed_usage_payload(&payload);
 
-        assert_eq!(usage.subscription.as_deref(), Some("Intermediate"));
+        assert_eq!(usage.subscription.as_deref(), Some("Allegretto"));
         assert_eq!(
             usage.summary,
             Some(UsageRow {
@@ -361,6 +395,18 @@ mod tests {
 
         assert!(usage.summary.is_none());
         assert!(usage.limits.is_empty());
+    }
+
+    #[test]
+    fn membership_level_is_not_the_subscription_plan() {
+        let payload: Value = serde_json::from_str(
+            r#"{ "user": { "membership": { "level": "LEVEL_INTERMEDIATE" } } }"#,
+        )
+        .unwrap();
+        let record = payload.as_object().unwrap();
+
+        assert_eq!(subscription_label(record), None);
+        assert_eq!(membership_level(record).as_deref(), Some("Intermediate"));
     }
 
     #[test]
