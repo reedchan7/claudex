@@ -16,11 +16,32 @@ pub struct ExtraUsage {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UsageLimitModel {
+    pub id: Option<String>,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UsageLimitScope {
+    pub model: Option<UsageLimitModel>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UsageLimit {
+    pub kind: Option<String>,
+    pub percent: Option<f64>,
+    pub resets_at: Option<String>,
+    pub scope: Option<UsageLimitScope>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Utilization {
     pub five_hour: Option<RateLimit>,
     pub seven_day: Option<RateLimit>,
     pub seven_day_sonnet: Option<RateLimit>,
     pub extra_usage: Option<ExtraUsage>,
+    #[serde(default)]
+    pub limits: Vec<UsageLimit>,
 }
 
 pub async fn fetch_utilization(token: &str, user_agent: &str) -> Result<Utilization, String> {
@@ -98,6 +119,40 @@ mod tests {
         let u: Utilization = serde_json::from_str(json).unwrap();
         assert_eq!(u.five_hour.as_ref().unwrap().utilization, Some(10.0));
         assert!(u.seven_day.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_limits_array() {
+        let json = r#"{
+            "limits": [
+                {
+                    "kind": "weekly_scoped",
+                    "group": "weekly",
+                    "percent": 86,
+                    "resets_at": "2026-07-03T18:59:59.678485+00:00",
+                    "scope": {
+                        "model": {
+                            "id": null,
+                            "display_name": "Fable"
+                        },
+                        "surface": null
+                    },
+                    "is_active": true
+                }
+            ]
+        }"#;
+        let u: Utilization = serde_json::from_str(json).unwrap();
+        let limit = &u.limits[0];
+        assert_eq!(limit.kind.as_deref(), Some("weekly_scoped"));
+        assert_eq!(limit.percent, Some(86.0));
+        assert_eq!(
+            limit
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.model.as_ref())
+                .and_then(|model| model.display_name.as_deref()),
+            Some("Fable")
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 A handful of commands set the tone:
 
-- **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, Sonnet-only, and usage credits, all rendered as crisp colored bars in a single command.
+- **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, model-specific limits, and usage credits, all rendered as crisp colored bars in a single command.
 - **`claudex codex usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits.
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs.
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
@@ -36,8 +36,8 @@ Current week (all models)
 ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 6% used
 Resets May 30 at 3am, 4d 11h left
 
-Current week (Sonnet only)
-██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 3% used
+Current week (Fable)
+███████████████████████████████████████████░░░░░░░ 86% used
 Resets May 30 at 3am, 4d 11h left
 
 Usage credits   off

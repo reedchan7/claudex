@@ -2,7 +2,7 @@ use chrono::{DateTime, Local, NaiveDate, Timelike};
 use colored::Colorize;
 use terminal_size::{Width, terminal_size};
 
-use crate::api::{ExtraUsage, RateLimit};
+use crate::api::{ExtraUsage, RateLimit, UsageLimit};
 use crate::commands::status::{self, Provider};
 
 fn format_duration_short(seconds: i64) -> String {
@@ -154,6 +154,65 @@ fn print_extra_usage(extra: &ExtraUsage) {
     }
 }
 
+fn limit_title(limit: &UsageLimit) -> Option<String> {
+    match limit.kind.as_deref()? {
+        "session" => Some("Current session (5h)".to_string()),
+        "weekly_all" => Some("Current week (all models)".to_string()),
+        "weekly_scoped" => {
+            let model = limit.scope.as_ref()?.model.as_ref()?;
+            let name = model.display_name.as_deref().or(model.id.as_deref())?;
+            Some(format!("Current week ({name})"))
+        }
+        _ => None,
+    }
+}
+
+fn rate_limit_from_usage_limit(limit: &UsageLimit) -> RateLimit {
+    RateLimit {
+        utilization: limit.percent,
+        resets_at: limit.resets_at.clone(),
+    }
+}
+
+fn print_usage_limits(limits: &[UsageLimit], show_timezone: bool) -> bool {
+    let mut printed = false;
+    for limit in limits {
+        let Some(title) = limit_title(limit) else {
+            continue;
+        };
+        if printed {
+            println!();
+        }
+        let rate_limit = rate_limit_from_usage_limit(limit);
+        print_limit_bar(&title, &rate_limit, show_timezone);
+        printed = true;
+    }
+    printed
+}
+
+fn print_legacy_limits(utilization: &crate::api::Utilization, show_timezone: bool) -> bool {
+    let limits: &[(&str, Option<&RateLimit>)] = &[
+        ("Current session (5h)", utilization.five_hour.as_ref()),
+        ("Current week (all models)", utilization.seven_day.as_ref()),
+        (
+            "Current week (Sonnet only)",
+            utilization.seven_day_sonnet.as_ref(),
+        ),
+    ];
+
+    let mut printed = false;
+    for (title, limit) in limits {
+        if let Some(limit) = limit {
+            if printed {
+                println!();
+            }
+            print_limit_bar(title, limit, show_timezone);
+            printed = true;
+        }
+    }
+    printed
+}
+
 pub async fn run(show_timezone: bool) {
     if let Err(e) = render(show_timezone).await {
         status::print_provider_error(Provider::Claude, &e);
@@ -169,30 +228,11 @@ pub async fn render(show_timezone: bool) -> Result<(), String> {
 
     let utilization = fetch_utilization_with_recovery(session, &user_agent).await?;
 
-    let limits: &[(&str, Option<&RateLimit>)] = &[
-        ("Current session (5h)", utilization.five_hour.as_ref()),
-        ("Current week (all models)", utilization.seven_day.as_ref()),
-        (
-            "Current week (Sonnet only)",
-            utilization.seven_day_sonnet.as_ref(),
-        ),
-    ];
-
-    let has_any = limits.iter().any(|(_, l)| l.is_some());
-    if !has_any {
+    let printed = print_usage_limits(&utilization.limits, show_timezone)
+        || print_legacy_limits(&utilization, show_timezone);
+    if !printed {
         println!("/usage is only available for subscription plans.");
         return Ok(());
-    }
-
-    let mut first = true;
-    for (title, limit) in limits {
-        if let Some(limit) = limit {
-            if !first {
-                println!();
-            }
-            print_limit_bar(title, limit, show_timezone);
-            first = false;
-        }
     }
 
     if let Some(extra) = &utilization.extra_usage {
@@ -360,6 +400,23 @@ mod tests {
     fn test_progress_bar_chars_over_100_clamps() {
         let bar = progress_bar_chars(120.0, 10);
         assert_eq!(bar, "██████████");
+    }
+
+    #[test]
+    fn test_limit_title_uses_scoped_model_name() {
+        let limit = crate::api::UsageLimit {
+            kind: Some("weekly_scoped".to_string()),
+            percent: Some(86.0),
+            resets_at: None,
+            scope: Some(crate::api::UsageLimitScope {
+                model: Some(crate::api::UsageLimitModel {
+                    id: None,
+                    display_name: Some("Fable".to_string()),
+                }),
+            }),
+        };
+
+        assert_eq!(limit_title(&limit).as_deref(), Some("Current week (Fable)"));
     }
 
     #[test]
