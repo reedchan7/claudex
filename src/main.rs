@@ -50,6 +50,9 @@ enum Commands {
     },
     /// Update coding agents (claude, codex, agy, kimi, reasonix, pi)
     Update {
+        /// Only run update commands; skip the post-update version check.
+        #[arg(long)]
+        no_post_check: bool,
         /// Specific agent(s) to update. If omitted, checks all.
         agents: Vec<String>,
     },
@@ -139,7 +142,10 @@ async fn main() {
         Commands::Kimi { command } => match command {
             KimiCommands::Usage { show_timezone } => commands::kimi_usage::run(show_timezone).await,
         },
-        Commands::Update { agents } => commands::update::run(&agents),
+        Commands::Update {
+            no_post_check,
+            agents,
+        } => commands::update::run(&agents, !no_post_check),
         Commands::SelfUpdate { check, force } => commands::self_update::run(check, force).await,
     }
 }
@@ -253,6 +259,22 @@ mod tests {
                 command: KimiCommands::Usage { show_timezone },
             } => assert!(show_timezone),
             _ => panic!("expected kimi usage command"),
+        }
+    }
+
+    #[test]
+    fn update_parses_no_post_check() {
+        let cli = Cli::try_parse_from(["claudex", "update", "--no-post-check", "kimi"]).unwrap();
+
+        match cli.command {
+            Commands::Update {
+                no_post_check,
+                agents,
+            } => {
+                assert!(no_post_check);
+                assert_eq!(agents, ["kimi"]);
+            }
+            _ => panic!("expected update command"),
         }
     }
 

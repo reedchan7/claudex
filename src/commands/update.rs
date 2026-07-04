@@ -177,7 +177,11 @@ fn do_update(agent: &Agent) -> bool {
     }
 }
 
-pub fn run(targets: &[String]) {
+fn update_confirmed(current: Option<&str>, expected: Option<&str>, post_check: bool) -> bool {
+    !post_check || expected.map_or(current.is_some(), |expected| current == Some(expected))
+}
+
+pub fn run(targets: &[String], post_check: bool) {
     let agents: Vec<&Agent> = if targets.is_empty() {
         AGENTS.iter().collect()
     } else {
@@ -226,7 +230,18 @@ pub fn run(targets: &[String]) {
                     installed.cyan()
                 );
                 if do_update(agent) {
-                    updated += 1;
+                    if post_check {
+                        let current = get_installed_version(agent);
+                        if update_confirmed(current.as_deref(), None, post_check) {
+                            println!("  {} current {}", "✓".green(), current.unwrap().cyan());
+                            updated += 1;
+                        } else {
+                            eprintln!("  {} could not detect version after update", "✗".red());
+                            failed += 1;
+                        }
+                    } else {
+                        updated += 1;
+                    }
                 } else {
                     failed += 1;
                 }
@@ -243,7 +258,23 @@ pub fn run(targets: &[String]) {
         println!("  {} → {}", installed.dimmed(), latest.green());
 
         if do_update(agent) {
-            updated += 1;
+            if post_check {
+                let current = get_installed_version(agent);
+                if update_confirmed(current.as_deref(), Some(&latest), post_check) {
+                    println!("  {} now {}", "✓".green(), current.unwrap().cyan());
+                    updated += 1;
+                } else {
+                    eprintln!(
+                        "  {} current {} after update (expected {})",
+                        "✗".red(),
+                        current.as_deref().unwrap_or("unknown").yellow(),
+                        latest.green()
+                    );
+                    failed += 1;
+                }
+            } else {
+                updated += 1;
+            }
         } else {
             failed += 1;
         }
@@ -336,6 +367,24 @@ mod tests {
     #[test]
     fn parse_pypi_version_missing() {
         assert_eq!(parse_pypi_version("{}"), None);
+    }
+
+    #[test]
+    fn update_confirmed_requires_latest_when_known() {
+        assert!(update_confirmed(Some("2.1.201"), Some("2.1.201"), true));
+        assert!(!update_confirmed(Some("2.1.200"), Some("2.1.201"), true));
+    }
+
+    #[test]
+    fn update_confirmed_accepts_detected_version_when_latest_unknown() {
+        assert!(update_confirmed(Some("1.0.16"), None, true));
+        assert!(!update_confirmed(None, None, true));
+    }
+
+    #[test]
+    fn update_confirmed_can_be_skipped() {
+        assert!(update_confirmed(Some("2.1.200"), Some("2.1.201"), false));
+        assert!(update_confirmed(None, Some("2.1.201"), false));
     }
 
     #[test]
