@@ -42,7 +42,7 @@ const AGENTS: &[Agent] = &[
         name: "pi",
         display: "Pi",
         version_cmd: &["pi", "--version"],
-        latest_cmd: LatestCmd::Pip("pi-agent"),
+        latest_cmd: LatestCmd::Npm("@earendil-works/pi-coding-agent"),
         update_cmd: &["pi", "update"],
     },
 ];
@@ -110,11 +110,21 @@ fn get_installed_version(agent: &Agent) -> Option<String> {
     extract_version(&output)
 }
 
+fn npm_registry_view_programs(pnpm_available: bool) -> &'static [&'static str] {
+    if pnpm_available { &["pnpm"] } else { &["npm"] }
+}
+
 fn get_latest_version(agent: &Agent) -> Option<String> {
     match &agent.latest_cmd {
         LatestCmd::Npm(pkg) => {
-            let output = run_quiet("npm", &["view", pkg, "version"])?;
-            extract_version(&output)
+            for program in npm_registry_view_programs(run_quiet("pnpm", &["--version"]).is_some()) {
+                if let Some(version) = run_quiet(program, &["view", pkg, "version"])
+                    .and_then(|raw| extract_version(&raw))
+                {
+                    return Some(version);
+                }
+            }
+            None
         }
         LatestCmd::Pip(pkg) => {
             // Try `pip index versions <pkg>` first, then fall back to PyPI JSON API.
@@ -356,6 +366,24 @@ mod tests {
             LatestCmd::Npm("@moonshot-ai/kimi-code")
         ));
         assert_eq!(kimi.update_cmd, &["kimi", "upgrade"]);
+    }
+
+    #[test]
+    fn pi_uses_official_npm_package_metadata() {
+        let pi = AGENTS.iter().find(|a| a.name == "pi").unwrap();
+        assert_eq!(pi.display, "Pi");
+        assert_eq!(pi.version_cmd, &["pi", "--version"]);
+        assert!(matches!(
+            pi.latest_cmd,
+            LatestCmd::Npm("@earendil-works/pi-coding-agent")
+        ));
+        assert_eq!(pi.update_cmd, &["pi", "update"]);
+    }
+
+    #[test]
+    fn npm_registry_metadata_prefers_pnpm_when_available() {
+        assert_eq!(npm_registry_view_programs(true), ["pnpm"]);
+        assert_eq!(npm_registry_view_programs(false), ["npm"]);
     }
 
     #[test]

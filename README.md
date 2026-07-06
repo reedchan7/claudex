@@ -184,7 +184,7 @@ No credentials needed. claudex checks each agent's installed version (via `<agen
 | agy | PyPI `antigravity-cli` | `agy update` |
 | kimi | npm `@moonshot-ai/kimi-code` | `kimi upgrade` |
 | reasonix | npm `reasonix` | `pnpm add -g reasonix` |
-| pi | PyPI `pi-agent` | `pi update` |
+| pi | npm `@earendil-works/pi-coding-agent` | `pi update` |
 
 Agents that aren't installed are silently skipped. Pass one or more agent names to update only those.
 
