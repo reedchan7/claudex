@@ -79,10 +79,27 @@ pub async fn run(show_timezone: bool) {
 
 pub async fn render(_show_timezone: bool) -> Result<(), String> {
     let creds = crate::kimi::auth::read_credentials()?;
-    let usage = crate::kimi::api::fetch_usage(&creds.access_token).await?;
+    let usage = fetch_usage_with_recovery(creds).await?;
 
     print_usage(&usage);
     Ok(())
+}
+
+fn is_auth_error(error: &str) -> bool {
+    error.to_ascii_lowercase().contains("authentication failed")
+}
+
+async fn fetch_usage_with_recovery(
+    creds: crate::kimi::auth::KimiCredentials,
+) -> Result<ManagedUsage, String> {
+    match crate::kimi::api::fetch_usage(&creds.access_token).await {
+        Ok(usage) => Ok(usage),
+        Err(e) if is_auth_error(&e) => {
+            let refreshed = crate::kimi::auth::refresh_credentials(&creds).await?;
+            crate::kimi::api::fetch_usage(&refreshed.access_token).await
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn print_usage(usage: &ManagedUsage) {

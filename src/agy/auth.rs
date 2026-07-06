@@ -10,6 +10,7 @@ const FALLBACK_AGY_VERSION: &str = "1.0.8";
 const KEYCHAIN_SERVICE: &str = "gemini";
 const KEYCHAIN_ACCOUNT: &str = "antigravity";
 const AGY_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const GOOGLE_CLIENT_SECRET_LEN: usize = 35;
 
 // Keychain-credential types/helpers below are wired into production only by the
 // macOS reader, but the cross-platform unit tests exercise them — so on
@@ -391,18 +392,16 @@ fn extract_google_client_secrets(text: &str) -> Vec<String> {
     let prefix = google_client_secret_prefix();
     let mut out = Vec::new();
     let mut offset = 0;
-    let bytes = text.as_bytes();
 
     while let Some(relative) = text[offset..].find(&prefix) {
         let start = offset + relative;
-        let mut end = start + prefix.len();
-        while end < bytes.len() && is_oauth_client_secret_byte(bytes[end]) {
-            end += 1;
-        }
-        if end > start + prefix.len() {
+        let end = start + GOOGLE_CLIENT_SECRET_LEN;
+        if end <= text.len() && text[start..end].bytes().all(is_oauth_client_secret_byte) {
             push_unique(&mut out, text[start..end].to_string());
+            offset = end;
+        } else {
+            offset = start + prefix.len();
         }
-        offset = end;
     }
 
     out
@@ -546,7 +545,11 @@ mod tests {
     #[test]
     fn test_extract_oauth_clients_from_agy_binary_text() {
         let client_id = ["123456789012-fake.", "apps.google", "usercontent.com"].concat();
-        let client_secret = ["GOC", "SPX-fake_secret"].concat();
+        let client_secret = format!(
+            "{}{}",
+            google_client_secret_prefix(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
         let text = format!("noise {client_secret} more noise {client_id}");
         let clients = extract_oauth_clients(text.as_bytes());
 
@@ -556,6 +559,37 @@ mod tests {
                 client_id,
                 client_secret,
             }]
+        );
+    }
+
+    #[test]
+    fn test_extract_oauth_clients_splits_adjacent_agy_client_secrets() {
+        let client_id = ["123456789012-fake.", "apps.google", "usercontent.com"].concat();
+        let first_secret = format!(
+            "{}{}",
+            google_client_secret_prefix(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        let second_secret = format!(
+            "{}{}",
+            google_client_secret_prefix(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        let text = format!("noise {first_secret}{second_secret}https://example.test {client_id}");
+        let clients = extract_oauth_clients(text.as_bytes());
+
+        assert_eq!(
+            clients,
+            vec![
+                AgyOAuthClient {
+                    client_id: client_id.clone(),
+                    client_secret: first_secret,
+                },
+                AgyOAuthClient {
+                    client_id,
+                    client_secret: second_secret,
+                }
+            ]
         );
     }
 
