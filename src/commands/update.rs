@@ -1,5 +1,9 @@
 use colored::Colorize;
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+// ponytail: finite confirmations cover normal installer prompts; stream them if an updater asks endlessly.
+const AUTO_CONFIRM_INPUT: &[u8] = b"yes\nyes\nyes\nyes\nyes\n";
 
 /// All supported coding agents and their update metadata.
 const AGENTS: &[Agent] = &[
@@ -167,7 +171,21 @@ fn parse_pypi_version(json: &str) -> Option<String> {
 fn do_update(agent: &Agent) -> bool {
     let cmd = agent.update_cmd;
     println!("{}", format!("  Running: {}", cmd.join(" ")).dimmed());
-    let status = Command::new(cmd[0]).args(&cmd[1..]).status();
+    let mut child = match Command::new(cmd[0])
+        .args(&cmd[1..])
+        .stdin(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("  {} failed to run update command: {}", "✗".red(), e);
+            return false;
+        }
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(AUTO_CONFIRM_INPUT);
+    }
+    let status = child.wait();
     match status {
         Ok(s) if s.success() => true,
         Ok(s) => {
@@ -413,6 +431,19 @@ mod tests {
     fn update_confirmed_can_be_skipped() {
         assert!(update_confirmed(Some("2.1.200"), Some("2.1.201"), false));
         assert!(update_confirmed(None, Some("2.1.201"), false));
+    }
+
+    #[test]
+    fn do_update_confirms_prompts_by_default() {
+        let agent = Agent {
+            name: "confirming",
+            display: "Confirming Agent",
+            version_cmd: &["echo", "1.0.0"],
+            latest_cmd: LatestCmd::Npm("unused"),
+            update_cmd: &["sh", "-c", "read answer; test \"$answer\" = yes"],
+        };
+
+        assert!(do_update(&agent));
     }
 
     #[test]
