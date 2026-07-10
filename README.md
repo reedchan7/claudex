@@ -187,12 +187,14 @@ No credentials needed. claudex checks each agent's installed version (via `<agen
 | Agent | Latest version source | Upgrade command |
 | --- | --- | --- |
 | claude | npm `@anthropic-ai/claude-code` | `claude update` |
-| codex | npm `@openai/codex` | `pnpm add -g @openai/codex` |
+| codex | npm `@openai/codex` | `pnpm add -g @openai/codex@latest --config.minimum-release-age=0` |
 | agy | PyPI `antigravity-cli` | `agy update` |
-| kimi | npm `@moonshot-ai/kimi-code` | `kimi upgrade` |
-| reasonix | npm `reasonix` | `pnpm add -g reasonix` |
+| kimi | npm `@moonshot-ai/kimi-code` | official install script (`curl …/install.sh \| bash`) |
+| reasonix | npm `reasonix` | `pnpm add -g reasonix@latest --config.minimum-release-age=0` |
 | pi | npm `@earendil-works/pi-coding-agent` | `pi update` |
 | grok | `grok update --check --json` | `grok update` |
+
+pnpm 11 defaults `minimum-release-age` to 24 hours, so a package published today can show up in `pnpm view … version` (and in claudex's "latest" check) while `pnpm add -g` still refuses it. claudex bypasses that gate for intentional upgrades. Kimi native installs often reject `kimi upgrade`, so claudex re-runs the official installer instead.
 
 Agents that aren't installed are silently skipped. Pass one or more agent names to update only those, or `--skip <agent>...` (repeatable / comma-separated) to exclude agents from an all-agent run.
 

@@ -19,7 +19,16 @@ const AGENTS: &[Agent] = &[
         display: "Codex",
         version_cmd: &["codex", "--version"],
         latest_cmd: LatestCmd::Npm("@openai/codex"),
-        update_cmd: &["pnpm", "add", "-g", "@openai/codex"],
+        // pnpm 11 defaults minimum-release-age to 24h, which blocks brand-new
+        // publishes; bypass for intentional upgrades. @latest rewrites the
+        // global range so 0.x caret pins cannot stick on an older minor.
+        update_cmd: &[
+            "pnpm",
+            "add",
+            "-g",
+            "@openai/codex@latest",
+            "--config.minimum-release-age=0",
+        ],
     },
     Agent {
         name: "agy",
@@ -33,14 +42,26 @@ const AGENTS: &[Agent] = &[
         display: "Kimi Code",
         version_cmd: &["kimi", "--version"],
         latest_cmd: LatestCmd::Npm("@moonshot-ai/kimi-code"),
-        update_cmd: &["kimi", "upgrade"],
+        // Native installs (default install.sh path) reject `kimi upgrade` on
+        // some platforms; re-run the official installer instead.
+        update_cmd: &[
+            "sh",
+            "-c",
+            "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
+        ],
     },
     Agent {
         name: "reasonix",
         display: "Reasonix",
         version_cmd: &["reasonix", "--version"],
         latest_cmd: LatestCmd::Npm("reasonix"),
-        update_cmd: &["pnpm", "add", "-g", "reasonix"],
+        update_cmd: &[
+            "pnpm",
+            "add",
+            "-g",
+            "reasonix@latest",
+            "--config.minimum-release-age=0",
+        ],
     },
     Agent {
         name: "pi",
@@ -458,7 +479,30 @@ mod tests {
             kimi.latest_cmd,
             LatestCmd::Npm("@moonshot-ai/kimi-code")
         ));
-        assert_eq!(kimi.update_cmd, &["kimi", "upgrade"]);
+        assert_eq!(
+            kimi.update_cmd,
+            &[
+                "sh",
+                "-c",
+                "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
+            ]
+        );
+    }
+
+    #[test]
+    fn pnpm_global_agents_bypass_minimum_release_age() {
+        for name in ["codex", "reasonix"] {
+            let agent = AGENTS.iter().find(|a| a.name == name).unwrap();
+            assert_eq!(agent.update_cmd[0], "pnpm");
+            assert!(
+                agent.update_cmd.contains(&"--config.minimum-release-age=0"),
+                "{name} update_cmd should bypass pnpm minimum-release-age"
+            );
+            assert!(
+                agent.update_cmd.iter().any(|arg| arg.ends_with("@latest")),
+                "{name} update_cmd should pin @latest"
+            );
+        }
     }
 
     #[test]
