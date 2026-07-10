@@ -36,7 +36,7 @@ impl Provider {
     pub fn skip_name(self) -> &'static str {
         match self {
             Provider::Claude => "claude",
-            Provider::Codex => "codex",
+            Provider::Codex => "gpt",
             Provider::Antigravity => "agy",
             Provider::Glm => "glm",
             Provider::Kimi => "kimi",
@@ -48,7 +48,7 @@ impl Provider {
     pub fn from_skip_name(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "claude" => Some(Provider::Claude),
-            "codex" => Some(Provider::Codex),
+            "gpt" | "codex" => Some(Provider::Codex),
             "agy" | "antigravity" | "gemini" => Some(Provider::Antigravity),
             "glm" | "zai" | "z.ai" | "bigmodel" => Some(Provider::Glm),
             "kimi" => Some(Provider::Kimi),
@@ -339,9 +339,16 @@ mod tests {
 
     #[test]
     fn skip_name_aliases_resolve() {
+        assert_eq!(Provider::skip_name(Provider::Codex), "gpt");
+        assert_eq!(Provider::from_skip_name("gpt"), Some(Provider::Codex));
+        assert_eq!(Provider::from_skip_name("codex"), Some(Provider::Codex));
         assert_eq!(Provider::from_skip_name("grok-build"), Some(Provider::Grok));
         assert_eq!(
             Provider::from_skip_name("antigravity"),
+            Some(Provider::Antigravity)
+        );
+        assert_eq!(
+            Provider::from_skip_name("gemini"),
             Some(Provider::Antigravity)
         );
         assert_eq!(Provider::from_skip_name("zai"), Some(Provider::Glm));

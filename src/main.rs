@@ -30,13 +30,14 @@ enum Commands {
         #[arg(long = "skip", value_name = "AGENT", action = clap::ArgAction::Append, value_delimiter = ',')]
         skip: Vec<String>,
     },
-    /// Codex CLI commands
+    /// Codex / ChatGPT plan commands
+    #[command(name = "gpt", alias = "codex")]
     Codex {
         #[command(subcommand)]
         command: CodexCommands,
     },
     /// Gemini / Antigravity CLI commands
-    #[command(name = "agy", alias = "antigravity")]
+    #[command(name = "agy", aliases = ["antigravity", "gemini"])]
     Agy {
         #[command(subcommand)]
         command: AgyCommands,
@@ -265,14 +266,26 @@ mod tests {
     }
 
     #[test]
-    fn codex_usage_parses_show_timezone() {
-        let cli = Cli::try_parse_from(["claudex", "codex", "usage", "--show-timezone"]).unwrap();
+    fn gpt_usage_parses_show_timezone() {
+        let cli = Cli::try_parse_from(["claudex", "gpt", "usage", "--show-timezone"]).unwrap();
 
         match cli.command {
             Commands::Codex {
                 command: CodexCommands::Usage { show_timezone },
             } => assert!(show_timezone),
-            _ => panic!("expected codex usage command"),
+            _ => panic!("expected gpt usage command"),
+        }
+    }
+
+    #[test]
+    fn gpt_usage_alias_codex_parses() {
+        let cli = Cli::try_parse_from(["claudex", "codex", "usage"]).unwrap();
+
+        match cli.command {
+            Commands::Codex {
+                command: CodexCommands::Usage { show_timezone },
+            } => assert!(!show_timezone),
+            _ => panic!("expected gpt usage via codex alias"),
         }
     }
 
@@ -285,6 +298,18 @@ mod tests {
                 command: AgyCommands::Usage { show_timezone },
             } => assert!(show_timezone),
             _ => panic!("expected agy usage command"),
+        }
+    }
+
+    #[test]
+    fn agy_usage_alias_gemini_parses() {
+        let cli = Cli::try_parse_from(["claudex", "gemini", "usage"]).unwrap();
+
+        match cli.command {
+            Commands::Agy {
+                command: AgyCommands::Usage { show_timezone },
+            } => assert!(!show_timezone),
+            _ => panic!("expected agy usage via gemini alias"),
         }
     }
 

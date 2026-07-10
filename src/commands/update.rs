@@ -245,7 +245,8 @@ fn resolve_agent_name(name: &str) -> Option<&'static Agent> {
     let lower = name.to_ascii_lowercase();
     let canonical = match lower.as_str() {
         "grok-build" | "grokbuild" => "grok",
-        "antigravity" => "agy",
+        "antigravity" | "gemini" => "agy",
+        "gpt" => "codex",
         other => other,
     };
     AGENTS.iter().find(|a| a.name == canonical)
@@ -510,6 +511,17 @@ mod tests {
         let selected = select_agents(&["grok-build".into()], &[]).unwrap();
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].name, "grok");
+    }
+
+    #[test]
+    fn select_agents_accepts_gpt_and_gemini_aliases() {
+        let gpt = select_agents(&["gpt".into()], &[]).unwrap();
+        assert_eq!(gpt.len(), 1);
+        assert_eq!(gpt[0].name, "codex");
+
+        let gemini = select_agents(&["gemini".into()], &[]).unwrap();
+        assert_eq!(gemini.len(), 1);
+        assert_eq!(gemini[0].name, "agy");
     }
 
     #[test]

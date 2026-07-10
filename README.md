@@ -7,9 +7,9 @@
 A handful of commands set the tone:
 
 - **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, model-specific limits, and usage credits, all rendered as crisp colored bars in a single command.
-- **`claudex codex usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits.
+- **`claudex gpt usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits. (`codex` remains a supported alias.)
 - **`claudex kimi usage`** — show your Kimi Code plan usage from the same managed usage endpoint Kimi Code uses: weekly budget plus the rolling 5-hour limit.
-- **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs.
+- **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs. (`gemini` and `antigravity` are aliases.)
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
 - **`claudex grok usage`** — your [Grok Build](https://docs.x.ai/build) credit / plan usage from the same billing endpoint the Grok CLI uses: weekly (or current-period) usage by product, plus any on-demand / prepaid balances.
 - **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi Code, Reasonix, Pi, Grok). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated. Pass `--skip <agent>...` to exclude agents.
@@ -22,7 +22,7 @@ No interactive session, no digging through a web app — just run the command an
 
 ## Example
 
-`claudex usage --all` shows everything at once — run `claudex usage`, `claudex codex usage`, `claudex kimi usage`, `claudex agy usage`, `claudex glm usage`, or `claudex grok usage` on its own to see just that provider. Pass `--skip <agent>...` with `--all` to exclude providers.
+`claudex usage --all` shows everything at once — run `claudex usage`, `claudex gpt usage`, `claudex kimi usage`, `claudex agy usage`, `claudex glm usage`, or `claudex grok usage` on its own to see just that provider. Pass `--skip <agent>...` with `--all` to exclude providers.
 Reset times are shown in your local timezone. Add `--show-timezone` when you also want the timezone name in the output.
 
 ```console
@@ -146,15 +146,17 @@ It resolves the OAuth access token from the first available source:
 
 It then detects your installed `claude` version (via `claude --version`) to send a matching `User-Agent`, calls `GET https://api.anthropic.com/api/oauth/usage`, and renders the response. If you can run `claude`, you can run `claudex usage`.
 
-### `claudex codex usage` (Codex / ChatGPT)
+### `claudex gpt usage` (Codex / ChatGPT)
 
-It reads the access token from `~/.codex/auth.json` (written when you sign in with the Codex CLI — run `codex`), sends a `codex-cli` `User-Agent` plus your `ChatGPT-Account-Id`, calls `GET https://chatgpt.com/backend-api/wham/usage`, and renders the response. If you can run `codex`, you can run `claudex codex usage`.
+It reads the access token from `~/.codex/auth.json` (written when you sign in with the Codex CLI — run `codex`), sends a `codex-cli` `User-Agent` plus your `ChatGPT-Account-Id`, calls `GET https://chatgpt.com/backend-api/wham/usage`, and renders the response. If you can run `codex`, you can run `claudex gpt usage` (or the `codex` alias).
 
 ### `claudex kimi usage` (Kimi Code)
 
 It reads the Kimi Code OAuth access token from `~/.kimi-code/credentials/kimi-code.json` (falling back to the legacy `~/.kimi/credentials/kimi-code.json`), calls `GET https://api.kimi.com/coding/v1/usages` with `Authorization: Bearer <token>`, and renders the weekly budget plus rolling limits returned by Kimi Code. If you can run `kimi usage`, you can run `claudex kimi usage`.
 
 ### `claudex agy usage` (Gemini / Antigravity)
+
+Aliases: `gemini`, `antigravity`.
 
 It reads Antigravity's Google OAuth access token from the system keyring (on macOS, Keychain service `gemini`, account `antigravity`), calls `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` for pooled quota groups, then uses `loadCodeAssist` plus `retrieveUserQuota` on `https://cloudcode-pa.googleapis.com/v1internal` for model-level buckets when Google returns depleted model quota. If the token has expired, run `agy` once so Antigravity refreshes its saved session.
 
@@ -203,7 +205,7 @@ Updates claudex itself, not the agents above. It asks GitHub for the latest rele
 To **run** claudex (using a prebuilt binary), you only need:
 
 - **macOS or Linux** (x86_64 or arm64). Windows is best-effort — no prebuilt binary; build from source.
-- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, an authenticated **Kimi Code** install for `claudex kimi usage`, an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, a **ZCode** sign-in (or `GLM_API_KEY`) for `claudex glm usage`, and/or an authenticated **Grok Build** install for `claudex grok usage`, with an active subscription or quota.
+- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex gpt usage`, an authenticated **Kimi Code** install for `claudex kimi usage`, an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, a **ZCode** sign-in (or `GLM_API_KEY`) for `claudex glm usage`, and/or an authenticated **Grok Build** install for `claudex grok usage`, with an active subscription or quota.
 
 No Rust toolchain is required to run a prebuilt binary. Rust (edition 2024, so 1.85+) is only needed if you build from source.
 
@@ -249,14 +251,15 @@ This installs the `claudex` binary to `~/.cargo/bin`.
 
 ```sh
 claudex usage         # show Claude plan usage limits
-claudex codex usage   # show Codex / ChatGPT plan usage limits
+claudex gpt usage     # show Codex / ChatGPT plan usage limits
 claudex agy usage     # show Gemini / Antigravity quota limits
+claudex gemini usage  # same as `claudex agy usage`
 claudex grok usage    # show Grok Build credit / plan usage
 claudex usage --all   # show every provider together
 claudex usage --all --skip grok,kimi   # all providers except Grok and Kimi
 claudex update --skip reasonix,pi      # update all agents except Reasonix and Pi
 claudex usage --show-timezone       # include the timezone name in reset times
-claudex codex usage --show-timezone # include the timezone name for Codex usage
+claudex gpt usage --show-timezone   # include the timezone name for Codex usage
 claudex agy usage --show-timezone   # include the timezone name for Gemini / Antigravity usage
 claudex update                # update all coding agents
 claudex update claude codex   # update specific agents only
