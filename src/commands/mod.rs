@@ -1,6 +1,7 @@
 pub mod agy_usage;
 pub mod codex_usage;
 pub mod glm_usage;
+pub mod grok_usage;
 pub mod kimi_usage;
 pub mod self_update;
 pub mod status;

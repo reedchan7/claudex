@@ -4,13 +4,13 @@ use terminal_size::{Width, terminal_size};
 use crate::commands::status::{self, Provider};
 
 const RULE_CHAR: char = '\u{2501}'; // ━
-const PROVIDER_COUNT: usize = 5;
-const PROVIDER_ORDER: [Provider; PROVIDER_COUNT] = [
+const PROVIDER_ORDER: &[Provider] = &[
     Provider::Claude,
     Provider::Codex,
     Provider::Antigravity,
     Provider::Glm,
     Provider::Kimi,
+    Provider::Grok,
 ];
 
 // Widest possible progress-bar line suffix: " 100.00% used".
@@ -45,6 +45,7 @@ fn provider_accent(provider: Provider) -> (u8, u8, u8) {
         Provider::Antigravity => (66, 133, 244),
         Provider::Glm => (99, 102, 241),
         Provider::Kimi => (37, 190, 191),
+        Provider::Grok => (232, 168, 56),
     }
 }
 
@@ -59,14 +60,57 @@ async fn render_provider(provider: Provider, show_timezone: bool) -> Result<(), 
         Provider::Antigravity => crate::commands::agy_usage::render(show_timezone).await,
         Provider::Glm => crate::commands::glm_usage::render(show_timezone, None).await,
         Provider::Kimi => crate::commands::kimi_usage::render(show_timezone).await,
+        Provider::Grok => crate::commands::grok_usage::render(show_timezone).await,
     }
 }
 
-pub async fn run(show_timezone: bool) {
+fn resolve_providers(skip: &[String]) -> Result<Vec<Provider>, String> {
+    let mut skip_set = Vec::new();
+    for name in skip {
+        match Provider::from_skip_name(name) {
+            Some(provider) => {
+                if !skip_set.contains(&provider) {
+                    skip_set.push(provider);
+                }
+            }
+            None => {
+                return Err(format!(
+                    "unknown provider '{name}'. Available: {}",
+                    PROVIDER_ORDER
+                        .iter()
+                        .map(|p| p.skip_name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
+
+    Ok(PROVIDER_ORDER
+        .iter()
+        .copied()
+        .filter(|p| !skip_set.contains(p))
+        .collect())
+}
+
+pub async fn run(show_timezone: bool, skip: &[String]) {
+    let providers = match resolve_providers(skip) {
+        Ok(providers) => providers,
+        Err(e) => {
+            eprintln!("{} {e}", "✗".red());
+            std::process::exit(1);
+        }
+    };
+
+    if providers.is_empty() {
+        eprintln!("{} all providers were skipped", "✗".red());
+        std::process::exit(1);
+    }
+
     let mut had_error = false;
     let mut rendered = 0;
 
-    for (index, provider) in PROVIDER_ORDER.iter().copied().enumerate() {
+    for (index, provider) in providers.into_iter().enumerate() {
         print!("{}", provider_gap(index));
         print_header(provider.label(), provider_accent(provider));
         match render_provider(provider, show_timezone).await {
@@ -102,15 +146,16 @@ mod tests {
     }
 
     #[test]
-    fn provider_order_places_kimi_after_glm() {
+    fn provider_order_places_grok_last() {
         assert_eq!(
-            PROVIDER_ORDER.map(Provider::label),
+            PROVIDER_ORDER.iter().map(|p| p.label()).collect::<Vec<_>>(),
             [
                 "Claude Code",
                 "Codex",
                 "Gemini / Antigravity",
                 "GLM / Z.ai",
                 "Kimi Code",
+                "Grok Build",
             ]
         );
     }
@@ -119,5 +164,19 @@ mod tests {
     fn provider_gap_adds_a_blank_line_between_agents() {
         assert_eq!(provider_gap(0), "");
         assert_eq!(provider_gap(1), "\n\n");
+    }
+
+    #[test]
+    fn resolve_providers_filters_skipped() {
+        let providers = resolve_providers(&["grok".into(), "kimi".into()]).unwrap();
+        assert!(!providers.contains(&Provider::Grok));
+        assert!(!providers.contains(&Provider::Kimi));
+        assert!(providers.contains(&Provider::Claude));
+    }
+
+    #[test]
+    fn resolve_providers_rejects_unknown_names() {
+        let err = resolve_providers(&["nope".into()]).unwrap_err();
+        assert!(err.contains("unknown provider"));
     }
 }

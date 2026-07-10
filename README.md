@@ -11,17 +11,18 @@ A handful of commands set the tone:
 - **`claudex kimi usage`** — show your Kimi Code plan usage from the same managed usage endpoint Kimi Code uses: weekly budget plus the rolling 5-hour limit.
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs.
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
-- **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi Code, Reasonix, Pi). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated.
+- **`claudex grok usage`** — your [Grok Build](https://docs.x.ai/build) credit / plan usage from the same billing endpoint the Grok CLI uses: weekly (or current-period) usage by product, plus any on-demand / prepaid balances.
+- **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi Code, Reasonix, Pi, Grok). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated. Pass `--skip <agent>...` to exclude agents.
 - **`claudex self-update`** — update claudex itself in place: it downloads the latest release binary for your platform, verifies its checksum, and swaps in the new one (falling back to the install script if anything goes wrong). No Rust toolchain needed.
 
 No interactive session, no digging through a web app — just run the command and you're done.
 
 > [!WARNING]
-> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, Google, Moonshot AI / Kimi, or Z.ai / 智谱. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, Kimi Code, and Gemini / Antigravity CLI already store locally — and, for GLM, the API key that ZCode stores locally (or `GLM_API_KEY`) — and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, `api.kimi.com`, `cloudcode-pa.googleapis.com`, and `api.z.ai` / `open.bigmodel.cn`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
+> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, Google, Moonshot AI / Kimi, Z.ai / 智谱, or xAI. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, Kimi Code, Gemini / Antigravity CLI, and Grok Build already store locally — and, for GLM, the API key that ZCode stores locally (or `GLM_API_KEY`) — and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, `api.kimi.com`, `cloudcode-pa.googleapis.com`, `api.z.ai` / `open.bigmodel.cn`, and `cli-chat-proxy.grok.com`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
 
 ## Example
 
-`claudex usage --all` shows everything at once — run `claudex usage`, `claudex codex usage`, `claudex kimi usage`, `claudex agy usage`, or `claudex glm usage` on its own to see just that provider.
+`claudex usage --all` shows everything at once — run `claudex usage`, `claudex codex usage`, `claudex kimi usage`, `claudex agy usage`, `claudex glm usage`, or `claudex grok usage` on its own to see just that provider. Pass `--skip <agent>...` with `--all` to exclude providers.
 Reset times are shown in your local timezone. Add `--show-timezone` when you also want the timezone name in the output.
 
 ```console
@@ -173,9 +174,13 @@ It resolves the edition and API key without a dedicated GLM CLI:
 
 It then calls `GET {base}/api/monitor/usage/quota/limit` (`https://api.z.ai` overseas, `https://open.bigmodel.cn` domestic) with `Authorization: Bearer <key>`, and renders the returned limits: the 5-hour session, the weekly window, and the MCP quota (with its per-tool breakdown). If you can sign in with ZCode, you can run `claudex glm usage`.
 
+### `claudex grok usage` (Grok Build)
+
+It reads the xAI OAuth access token from `~/.grok/auth.json` (written by `grok login`; this takes precedence over `XAI_API_KEY`, matching Grok itself), optionally refreshes it via `auth.x.ai` when expired, then calls `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with a matching `x-grok-client-version` header and renders the returned credit / product usage. `XAI_API_KEY` is accepted only when no session is stored. If you can run `grok`, you can run `claudex grok usage`.
+
 ### `claudex update`
 
-No credentials needed. claudex checks each agent's installed version (via `<agent> --version`) and compares it to the latest published version from the npm registry or PyPI. If an update is available, it runs the appropriate upgrade command:
+No credentials needed. claudex checks each agent's installed version (via `<agent> --version`) and compares it to the latest published version from the npm registry, PyPI, or (for Grok) `grok update --check --json`. If an update is available, it runs the appropriate upgrade command:
 
 | Agent | Latest version source | Upgrade command |
 | --- | --- | --- |
@@ -185,8 +190,9 @@ No credentials needed. claudex checks each agent's installed version (via `<agen
 | kimi | npm `@moonshot-ai/kimi-code` | `kimi upgrade` |
 | reasonix | npm `reasonix` | `pnpm add -g reasonix` |
 | pi | npm `@earendil-works/pi-coding-agent` | `pi update` |
+| grok | `grok update --check --json` | `grok update` |
 
-Agents that aren't installed are silently skipped. Pass one or more agent names to update only those.
+Agents that aren't installed are silently skipped. Pass one or more agent names to update only those, or `--skip <agent>...` (repeatable / comma-separated) to exclude agents from an all-agent run.
 
 ### `claudex self-update`
 
@@ -197,7 +203,7 @@ Updates claudex itself, not the agents above. It asks GitHub for the latest rele
 To **run** claudex (using a prebuilt binary), you only need:
 
 - **macOS or Linux** (x86_64 or arm64). Windows is best-effort — no prebuilt binary; build from source.
-- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, an authenticated **Kimi Code** install for `claudex kimi usage`, an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, and/or a **ZCode** sign-in (or `GLM_API_KEY`) for `claudex glm usage`, with an active subscription or quota.
+- An authenticated **Claude Code** install for `claudex usage`, an authenticated **Codex CLI** install for `claudex codex usage`, an authenticated **Kimi Code** install for `claudex kimi usage`, an authenticated **Gemini / Antigravity CLI** install for `claudex agy usage`, a **ZCode** sign-in (or `GLM_API_KEY`) for `claudex glm usage`, and/or an authenticated **Grok Build** install for `claudex grok usage`, with an active subscription or quota.
 
 No Rust toolchain is required to run a prebuilt binary. Rust (edition 2024, so 1.85+) is only needed if you build from source.
 
@@ -245,7 +251,10 @@ This installs the `claudex` binary to `~/.cargo/bin`.
 claudex usage         # show Claude plan usage limits
 claudex codex usage   # show Codex / ChatGPT plan usage limits
 claudex agy usage     # show Gemini / Antigravity quota limits
-claudex usage --all   # show Claude, Codex, and Gemini / Antigravity usage together
+claudex grok usage    # show Grok Build credit / plan usage
+claudex usage --all   # show every provider together
+claudex usage --all --skip grok,kimi   # all providers except Grok and Kimi
+claudex update --skip reasonix,pi      # update all agents except Reasonix and Pi
 claudex usage --show-timezone       # include the timezone name in reset times
 claudex codex usage --show-timezone # include the timezone name for Codex usage
 claudex agy usage --show-timezone   # include the timezone name for Gemini / Antigravity usage

@@ -3,13 +3,14 @@ use terminal_size::{Width, terminal_size};
 
 const EMPTY_CHAR: char = '░';
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
     Claude,
     Codex,
     Antigravity,
     Glm,
     Kimi,
+    Grok,
 }
 
 pub struct ProviderStatus {
@@ -27,6 +28,32 @@ impl Provider {
             Provider::Antigravity => "Gemini / Antigravity",
             Provider::Glm => "GLM / Z.ai",
             Provider::Kimi => "Kimi Code",
+            Provider::Grok => "Grok Build",
+        }
+    }
+
+    /// Canonical short name used by `--skip` and CLI subcommands.
+    pub fn skip_name(self) -> &'static str {
+        match self {
+            Provider::Claude => "claude",
+            Provider::Codex => "codex",
+            Provider::Antigravity => "agy",
+            Provider::Glm => "glm",
+            Provider::Kimi => "kimi",
+            Provider::Grok => "grok",
+        }
+    }
+
+    /// Resolve a user-supplied skip/agent name to a provider, if known.
+    pub fn from_skip_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "claude" => Some(Provider::Claude),
+            "codex" => Some(Provider::Codex),
+            "agy" | "antigravity" | "gemini" => Some(Provider::Antigravity),
+            "glm" | "zai" | "z.ai" | "bigmodel" => Some(Provider::Glm),
+            "kimi" => Some(Provider::Kimi),
+            "grok" | "grok-build" | "grokbuild" => Some(Provider::Grok),
+            _ => None,
         }
     }
 
@@ -34,6 +61,7 @@ impl Provider {
         match self {
             Provider::Antigravity => "Antigravity",
             Provider::Glm => "GLM",
+            Provider::Grok => "Grok",
             _ => self.label(),
         }
     }
@@ -45,6 +73,7 @@ impl Provider {
             Provider::Antigravity => "Run `agy` and sign in with Google.",
             Provider::Glm => "Sign in with ZCode, or set `GLM_API_KEY`.",
             Provider::Kimi => "Run `kimi login` and sign in with Kimi Code.",
+            Provider::Grok => "Run `grok login` and sign in with xAI.",
         }
     }
 
@@ -55,6 +84,7 @@ impl Provider {
             Provider::Antigravity => "Run `agy` and sign in with Google.",
             Provider::Glm => "Sign in with ZCode again, or update `GLM_API_KEY`.",
             Provider::Kimi => "Run `kimi login` and sign in again.",
+            Provider::Grok => "Run `grok login` and sign in again.",
         }
     }
 }
@@ -145,6 +175,11 @@ fn is_not_connected(provider: Provider, lower: &str) -> bool {
         Provider::Kimi => {
             lower.contains("could not find kimi code credentials")
                 || lower.contains("kimi code credentials have no access token")
+        }
+        Provider::Grok => {
+            lower.contains("could not find grok credentials")
+                || lower.contains("auth.json has no sessions")
+                || lower.contains("no usable access token")
         }
     }
 }
@@ -288,6 +323,29 @@ mod tests {
             "Run `kimi login` and sign in with Kimi Code."
         );
         assert!(status.details.is_none());
+    }
+
+    #[test]
+    fn classifies_missing_grok_credentials_as_not_connected() {
+        let status = status_for_error(
+            Provider::Grok,
+            "could not find Grok credentials at /tmp/auth.json — run `grok login`",
+        );
+
+        assert_eq!(status.heading, "Grok Build is not connected");
+        assert_eq!(status.next_step, "Run `grok login` and sign in with xAI.");
+        assert!(status.details.is_none());
+    }
+
+    #[test]
+    fn skip_name_aliases_resolve() {
+        assert_eq!(Provider::from_skip_name("grok-build"), Some(Provider::Grok));
+        assert_eq!(
+            Provider::from_skip_name("antigravity"),
+            Some(Provider::Antigravity)
+        );
+        assert_eq!(Provider::from_skip_name("zai"), Some(Provider::Glm));
+        assert_eq!(Provider::from_skip_name("unknown"), None);
     }
 
     #[test]

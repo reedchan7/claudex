@@ -4,6 +4,7 @@ mod auth;
 mod codex;
 mod commands;
 mod glm;
+mod grok;
 mod kimi;
 
 use clap::{Parser, Subcommand};
@@ -19,12 +20,15 @@ struct Cli {
 enum Commands {
     /// Show Claude plan usage limits
     Usage {
-        /// Show Claude Code, Codex, Kimi Code, Gemini / Antigravity, and GLM usage limits
+        /// Show Claude Code, Codex, Kimi Code, Gemini / Antigravity, GLM, and Grok usage limits
         #[arg(long)]
         all: bool,
         /// Show the timezone name next to reset times
         #[arg(long)]
         show_timezone: bool,
+        /// Skip one or more providers when used with `--all` (repeatable or comma-separated)
+        #[arg(long = "skip", value_name = "AGENT", action = clap::ArgAction::Append, value_delimiter = ',')]
+        skip: Vec<String>,
     },
     /// Codex CLI commands
     Codex {
@@ -48,11 +52,20 @@ enum Commands {
         #[command(subcommand)]
         command: KimiCommands,
     },
-    /// Update coding agents (claude, codex, agy, kimi, reasonix, pi)
+    /// Grok Build commands
+    #[command(name = "grok", alias = "grok-build")]
+    Grok {
+        #[command(subcommand)]
+        command: GrokCommands,
+    },
+    /// Update coding agents (claude, codex, agy, kimi, reasonix, pi, grok)
     Update {
         /// Only run update commands; skip the post-update version check.
         #[arg(long)]
         no_post_check: bool,
+        /// Skip one or more agents (repeatable or comma-separated)
+        #[arg(long = "skip", value_name = "AGENT", action = clap::ArgAction::Append, value_delimiter = ',')]
+        skip: Vec<String>,
         /// Specific agent(s) to update. If omitted, checks all.
         agents: Vec<String>,
     },
@@ -113,14 +126,32 @@ enum KimiCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum GrokCommands {
+    /// Show Grok Build credit / plan usage
+    Usage {
+        /// Show the timezone name next to reset times
+        #[arg(long)]
+        show_timezone: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Usage { all, show_timezone } => {
+        Commands::Usage {
+            all,
+            show_timezone,
+            skip,
+        } => {
             if all {
-                commands::usage_all::run(show_timezone).await
+                commands::usage_all::run(show_timezone, &skip).await
             } else {
+                if !skip.is_empty() {
+                    eprintln!("--skip is only used with `usage --all`");
+                    std::process::exit(2);
+                }
                 commands::usage::run(show_timezone).await
             }
         }
@@ -142,10 +173,14 @@ async fn main() {
         Commands::Kimi { command } => match command {
             KimiCommands::Usage { show_timezone } => commands::kimi_usage::run(show_timezone).await,
         },
+        Commands::Grok { command } => match command {
+            GrokCommands::Usage { show_timezone } => commands::grok_usage::run(show_timezone).await,
+        },
         Commands::Update {
             no_post_check,
+            skip,
             agents,
-        } => commands::update::run(&agents, !no_post_check),
+        } => commands::update::run(&agents, &skip, !no_post_check),
         Commands::SelfUpdate { check, force } => commands::self_update::run(check, force).await,
     }
 }
@@ -169,9 +204,14 @@ mod tests {
         let cli = Cli::try_parse_from(["claudex", "usage", "--show-timezone"]).unwrap();
 
         match cli.command {
-            Commands::Usage { all, show_timezone } => {
+            Commands::Usage {
+                all,
+                show_timezone,
+                skip,
+            } => {
                 assert!(!all);
                 assert!(show_timezone);
+                assert!(skip.is_empty());
             }
             _ => panic!("expected usage command"),
         }
@@ -182,9 +222,43 @@ mod tests {
         let cli = Cli::try_parse_from(["claudex", "usage", "--all", "--show-timezone"]).unwrap();
 
         match cli.command {
-            Commands::Usage { all, show_timezone } => {
+            Commands::Usage {
+                all,
+                show_timezone,
+                skip,
+            } => {
                 assert!(all);
                 assert!(show_timezone);
+                assert!(skip.is_empty());
+            }
+            _ => panic!("expected usage command"),
+        }
+    }
+
+    #[test]
+    fn usage_all_parses_skip_agents() {
+        let cli = Cli::try_parse_from([
+            "claudex", "usage", "--all", "--skip", "grok", "--skip", "kimi",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Usage { all, skip, .. } => {
+                assert!(all);
+                assert_eq!(skip, ["grok", "kimi"]);
+            }
+            _ => panic!("expected usage command"),
+        }
+    }
+
+    #[test]
+    fn usage_all_parses_comma_separated_skip() {
+        let cli =
+            Cli::try_parse_from(["claudex", "usage", "--all", "--skip", "grok,kimi"]).unwrap();
+
+        match cli.command {
+            Commands::Usage { skip, .. } => {
+                assert_eq!(skip, ["grok", "kimi"]);
             }
             _ => panic!("expected usage command"),
         }
@@ -269,12 +343,54 @@ mod tests {
         match cli.command {
             Commands::Update {
                 no_post_check,
+                skip,
                 agents,
             } => {
                 assert!(no_post_check);
+                assert!(skip.is_empty());
                 assert_eq!(agents, ["kimi"]);
             }
             _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn update_parses_skip_agents() {
+        let cli = Cli::try_parse_from([
+            "claudex", "update", "--skip", "reasonix", "--skip", "pi", "claude",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Update { skip, agents, .. } => {
+                assert_eq!(skip, ["reasonix", "pi"]);
+                assert_eq!(agents, ["claude"]);
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn grok_usage_parses_show_timezone() {
+        let cli = Cli::try_parse_from(["claudex", "grok", "usage", "--show-timezone"]).unwrap();
+
+        match cli.command {
+            Commands::Grok {
+                command: GrokCommands::Usage { show_timezone },
+            } => assert!(show_timezone),
+            _ => panic!("expected grok usage command"),
+        }
+    }
+
+    #[test]
+    fn grok_usage_alias_grok_build_parses() {
+        let cli = Cli::try_parse_from(["claudex", "grok-build", "usage"]).unwrap();
+
+        match cli.command {
+            Commands::Grok {
+                command: GrokCommands::Usage { show_timezone },
+            } => assert!(!show_timezone),
+            _ => panic!("expected grok usage via grok-build alias"),
         }
     }
 

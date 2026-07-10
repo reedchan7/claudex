@@ -49,6 +49,17 @@ const AGENTS: &[Agent] = &[
         latest_cmd: LatestCmd::Npm("@earendil-works/pi-coding-agent"),
         update_cmd: &["pi", "update"],
     },
+    Agent {
+        name: "grok",
+        display: "Grok Build",
+        version_cmd: &["grok", "--version"],
+        latest_cmd: LatestCmd::JsonField {
+            program: "grok",
+            args: &["update", "--check", "--json"],
+            field: "latestVersion",
+        },
+        update_cmd: &["grok", "update"],
+    },
 ];
 
 struct Agent {
@@ -69,6 +80,12 @@ enum LatestCmd {
     Npm(&'static str),
     /// PyPI lookup via `pip index versions <pkg>`.
     Pip(&'static str),
+    /// Run a command and read a version field from its JSON stdout.
+    JsonField {
+        program: &'static str,
+        args: &'static [&'static str],
+        field: &'static str,
+    },
 }
 
 /// Run a command and return trimmed stdout, or None on failure.
@@ -149,7 +166,22 @@ fn get_latest_version(agent: &Agent) -> Option<String> {
                 parse_pypi_version(&raw)
             })
         }
+        LatestCmd::JsonField {
+            program,
+            args,
+            field,
+        } => run_quiet(program, args).and_then(|raw| parse_json_version_field(&raw, field)),
     }
+}
+
+/// Extract a version string from a JSON object field (e.g. `"latestVersion":"0.2.93"`).
+fn parse_json_version_field(json: &str, field: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let raw = value.get(field)?.as_str()?;
+    extract_version(raw).or_else(|| {
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 /// Minimal JSON extraction of `"version"` from PyPI JSON response.
@@ -209,27 +241,69 @@ fn update_confirmed(current: Option<&str>, expected: Option<&str>, post_check: b
     !post_check || expected.map_or(current.is_some(), |expected| current == Some(expected))
 }
 
-pub fn run(targets: &[String], post_check: bool) {
-    let agents: Vec<&Agent> = if targets.is_empty() {
+fn resolve_agent_name(name: &str) -> Option<&'static Agent> {
+    let lower = name.to_ascii_lowercase();
+    let canonical = match lower.as_str() {
+        "grok-build" | "grokbuild" => "grok",
+        "antigravity" => "agy",
+        other => other,
+    };
+    AGENTS.iter().find(|a| a.name == canonical)
+}
+
+fn available_agent_names() -> String {
+    AGENTS.iter().map(|a| a.name).collect::<Vec<_>>().join(", ")
+}
+
+fn select_agents(targets: &[String], skip: &[String]) -> Result<Vec<&'static Agent>, String> {
+    let mut selected: Vec<&'static Agent> = if targets.is_empty() {
         AGENTS.iter().collect()
     } else {
-        let mut selected = Vec::new();
+        let mut selected: Vec<&'static Agent> = Vec::new();
         for name in targets {
-            let lower = name.to_ascii_lowercase();
-            match AGENTS.iter().find(|a| a.name == lower) {
-                Some(a) => selected.push(a),
+            match resolve_agent_name(name) {
+                Some(a) => {
+                    if !selected.iter().any(|s| s.name == a.name) {
+                        selected.push(a);
+                    }
+                }
                 None => {
-                    eprintln!(
-                        "{} unknown agent '{}'. Available: {}",
-                        "✗".red(),
-                        name,
-                        AGENTS.iter().map(|a| a.name).collect::<Vec<_>>().join(", ")
-                    );
-                    std::process::exit(1);
+                    return Err(format!(
+                        "unknown agent '{name}'. Available: {}",
+                        available_agent_names()
+                    ));
                 }
             }
         }
         selected
+    };
+
+    for name in skip {
+        match resolve_agent_name(name) {
+            Some(a) => selected.retain(|s| s.name != a.name),
+            None => {
+                return Err(format!(
+                    "unknown agent '{name}'. Available: {}",
+                    available_agent_names()
+                ));
+            }
+        }
+    }
+
+    if selected.is_empty() {
+        return Err("no agents left after applying --skip".to_string());
+    }
+
+    Ok(selected)
+}
+
+pub fn run(targets: &[String], skip: &[String], post_check: bool) {
+    let agents = match select_agents(targets, skip) {
+        Ok(agents) => agents,
+        Err(e) => {
+            eprintln!("{} {e}", "✗".red());
+            std::process::exit(1);
+        }
     };
 
     let mut updated = 0u32;
@@ -396,6 +470,54 @@ mod tests {
             LatestCmd::Npm("@earendil-works/pi-coding-agent")
         ));
         assert_eq!(pi.update_cmd, &["pi", "update"]);
+    }
+
+    #[test]
+    fn grok_uses_self_update_metadata() {
+        let grok = AGENTS.iter().find(|a| a.name == "grok").unwrap();
+        assert_eq!(grok.display, "Grok Build");
+        assert_eq!(grok.version_cmd, &["grok", "--version"]);
+        assert!(matches!(
+            grok.latest_cmd,
+            LatestCmd::JsonField {
+                program: "grok",
+                field: "latestVersion",
+                ..
+            }
+        ));
+        assert_eq!(grok.update_cmd, &["grok", "update"]);
+    }
+
+    #[test]
+    fn parse_json_version_field_reads_latest() {
+        let json = r#"{"currentVersion":"0.2.90","latestVersion":"0.2.93","updateAvailable":true}"#;
+        assert_eq!(
+            parse_json_version_field(json, "latestVersion").as_deref(),
+            Some("0.2.93")
+        );
+    }
+
+    #[test]
+    fn select_agents_applies_skip() {
+        let selected = select_agents(&[], &["reasonix".into(), "pi".into()]).unwrap();
+        assert!(!selected.iter().any(|a| a.name == "reasonix"));
+        assert!(!selected.iter().any(|a| a.name == "pi"));
+        assert!(selected.iter().any(|a| a.name == "claude"));
+    }
+
+    #[test]
+    fn select_agents_accepts_grok_alias() {
+        let selected = select_agents(&["grok-build".into()], &[]).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "grok");
+    }
+
+    #[test]
+    fn select_agents_errors_when_everything_skipped() {
+        match select_agents(&["claude".into()], &["claude".into()]) {
+            Ok(_) => panic!("expected error when every agent is skipped"),
+            Err(err) => assert!(err.contains("no agents left")),
+        }
     }
 
     #[test]
