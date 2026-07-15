@@ -8,11 +8,32 @@ pub struct BillingResponse {
     pub config: Option<BillingConfig>,
 }
 
+/// Standard (non-credits) billing response from `/v1/billing`.
+/// Used as a fallback when the credits view does not contain usable
+/// percentage/product usage for the current subscription tier.
+#[derive(Debug, Deserialize)]
+pub struct RawBillingResponse {
+    pub config: Option<RawBillingConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawBillingConfig {
+    pub monthly_limit: Option<MoneyVal>,
+    pub used: Option<MoneyVal>,
+    pub on_demand_cap: Option<MoneyVal>,
+    pub on_demand_used: Option<MoneyVal>,
+    #[allow(dead_code)]
+    pub billing_period_start: Option<String>,
+    pub billing_period_end: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BillingConfig {
     pub current_period: Option<UsagePeriod>,
     pub credit_usage_percent: Option<f64>,
+    #[allow(dead_code)]
     pub monthly_limit: Option<MoneyVal>,
     pub on_demand_cap: Option<MoneyVal>,
     pub on_demand_used: Option<MoneyVal>,
@@ -74,6 +95,32 @@ pub async fn fetch_billing(access_token: &str) -> Result<BillingResponse, String
         .map_err(|e| format!("failed to parse Grok billing data: {e}"))
 }
 
+/// Fetch the standard billing view from `/v1/billing` (no `format=credits`).
+///
+/// Exposes `monthlyLimit`/`used` for unified-billing subscribers (e.g.
+/// SuperGrok with Grok Code) — a monthly USD-billed view supplementary to
+/// the weekly credits view. Grok's own `/usage` does not surface this view;
+/// `claudex` shows it only as a labelled secondary line.
+pub async fn fetch_billing_raw(access_token: &str) -> Result<RawBillingResponse, String> {
+    let (client, version) = http_client()?;
+    let response = client
+        .get(raw_billing_url(&base_url()))
+        .bearer_auth(access_token)
+        .header("Accept", "application/json")
+        .header("User-Agent", format!("grok-shell/{version}"))
+        .header("x-grok-client-version", &version)
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch Grok billing data: {e}"))?;
+
+    check_auth_status(response.status(), "Grok billing data")?;
+
+    response
+        .json::<RawBillingResponse>()
+        .await
+        .map_err(|e| format!("failed to parse Grok billing data: {e}"))
+}
+
 /// Fetch account profile, including subscription tier when available.
 pub async fn fetch_user(access_token: &str) -> Result<UserResponse, String> {
     let (client, version) = http_client()?;
@@ -119,6 +166,10 @@ fn base_url() -> String {
 
 fn billing_url(base_url: &str) -> String {
     format!("{}/billing?format=credits", base_url.trim_end_matches('/'))
+}
+
+fn raw_billing_url(base_url: &str) -> String {
+    format!("{}/billing", base_url.trim_end_matches('/'))
 }
 
 fn user_url(base_url: &str) -> String {

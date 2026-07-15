@@ -60,7 +60,7 @@ async fn render_provider(provider: Provider, show_timezone: bool) -> Result<(), 
         Provider::Antigravity => crate::commands::agy_usage::render(show_timezone).await,
         Provider::Glm => crate::commands::glm_usage::render(show_timezone, None).await,
         Provider::Kimi => crate::commands::kimi_usage::render(show_timezone).await,
-        Provider::Grok => crate::commands::grok_usage::render(show_timezone).await,
+        Provider::Grok => crate::commands::grok_usage::render(show_timezone, false).await,
     }
 }
 

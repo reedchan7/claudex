@@ -3,7 +3,9 @@ use colored::Colorize;
 use terminal_size::{Width, terminal_size};
 
 use crate::commands::status::{self, Provider};
-use crate::grok::api::{BillingConfig, BillingResponse, MoneyVal, UserResponse};
+use crate::grok::api::{
+    BillingConfig, BillingResponse, MoneyVal, RawBillingConfig, RawBillingResponse, UserResponse,
+};
 
 const FILL_CHAR: char = '\u{2588}';
 const EMPTY_CHAR: char = '\u{2591}';
@@ -156,7 +158,57 @@ fn print_usage_bar(title: &str, used_percent: f64, resets_at: Option<&str>, show
     }
 }
 
-fn print_billing(config: &BillingConfig, subscription: Option<&str>, show_timezone: bool) {
+/// Weekly usage to render from the credits (`/billing?format=credits`) view.
+#[derive(Debug, PartialEq)]
+enum CreditsUsage {
+    /// Per-product bars, when `productUsage` is present.
+    Products(Vec<(String, f64)>),
+    /// A single aggregate percentage.
+    Aggregate(f64),
+}
+
+/// Resolve the weekly usage to render from the credits billing view.
+///
+/// Grok's `/billing?format=credits` omits `creditUsagePercent` and
+/// `productUsage` when current usage is 0%. A present `currentPeriod` thus
+/// means "0% this period" — not "no data", and not a reason to fall back to
+/// the monthly billing view. Returns `None` only when there is no
+/// `currentPeriod` at all.
+fn credits_usage(config: &BillingConfig) -> Option<CreditsUsage> {
+    // No current period → nothing to render.
+    config.current_period.as_ref()?;
+
+    let products: Vec<(String, f64)> = config
+        .product_usage
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|p| {
+            let name = p
+                .product
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())?
+                .to_string();
+            p.usage_percent.map(|pct| (name, pct))
+        })
+        .collect();
+    if !products.is_empty() {
+        return Some(CreditsUsage::Products(products));
+    }
+    if let Some(pct) = config.credit_usage_percent {
+        return Some(CreditsUsage::Aggregate(pct));
+    }
+    // Period present but no percent fields → usage is 0%.
+    Some(CreditsUsage::Aggregate(0.0))
+}
+
+fn print_billing(
+    config: &BillingConfig,
+    raw_config: Option<&RawBillingConfig>,
+    subscription: Option<&str>,
+    show_timezone: bool,
+) {
     if let Some(tier) = subscription
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -171,7 +223,10 @@ fn print_billing(config: &BillingConfig, subscription: Option<&str>, show_timezo
         println!("{} {}\n", "Subscription:".bold(), humanize_tier(tier));
     }
 
-    let resets_at = config
+    // The credits view's `currentPeriod` is the real usage window for
+    // SuperGrok (weekly). Its `end` is the weekly reset — never use the raw
+    // view's monthly billing-period end for the usage bar.
+    let weekly_resets_at = config
         .current_period
         .as_ref()
         .and_then(|p| p.end.as_deref())
@@ -184,44 +239,64 @@ fn print_billing(config: &BillingConfig, subscription: Option<&str>, show_timezo
     );
 
     let mut printed = false;
-    let products = config
-        .product_usage
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .filter(|p| {
-            p.product
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|s| !s.is_empty())
-                && p.usage_percent.is_some()
-        })
-        .collect::<Vec<_>>();
 
-    if !products.is_empty() {
-        for product in products {
-            let name = product.product.as_deref().unwrap().trim();
-            let percent = product.usage_percent.unwrap();
-            let title = format!("{period} ({})", product_label(name));
-            if printed {
-                println!();
+    match credits_usage(config) {
+        Some(CreditsUsage::Products(products)) => {
+            for (i, (name, percent)) in products.iter().enumerate() {
+                if i > 0 {
+                    println!();
+                }
+                let title = format!("{period} ({})", product_label(name));
+                print_usage_bar(&title, *percent, weekly_resets_at, show_timezone);
             }
-            print_usage_bar(&title, percent, resets_at, show_timezone);
             printed = true;
         }
-    } else if let Some(percent) = config.credit_usage_percent {
-        print_usage_bar(period, percent, resets_at, show_timezone);
+        Some(CreditsUsage::Aggregate(percent)) => {
+            print_usage_bar(period, percent, weekly_resets_at, show_timezone);
+            printed = true;
+        }
+        None => {}
+    }
+
+    // Monthly billed usage (Grok Code) from the standard `/billing` view —
+    // supplementary, never the main usage bar. Grok's own /usage does not
+    // surface this view. Per xAI's billing docs the unit is USD; the API
+    // exposes no explicit unit field, so label it as USD.
+    if let Some(raw) = raw_config
+        && let (Some(limit), Some(used)) = (money_val(&raw.monthly_limit), money_val(&raw.used))
+        && limit > 0.0
+    {
+        if printed {
+            println!();
+        }
+        // Unofficial monthly estimate from the /billing proxy. Grok only
+        // exposes weekly limits, so this monthly figure is unverified and
+        // shown only on opt-in (`--monthly`), labelled as an estimate.
+        let percent = (used / limit * 100.0).min(100.0);
+        let title = format!("Monthly estimate (USD) ({used:.0} / {limit:.0})");
+        print_usage_bar(
+            &title,
+            percent,
+            raw.billing_period_end.as_deref(),
+            show_timezone,
+        );
+        println!(
+            "{}",
+            "Unofficial — Grok exposes only weekly limits; unit unconfirmed.".dimmed()
+        );
         printed = true;
     }
 
     print_money_line(
         "On-demand used",
-        money_val(&config.on_demand_used),
+        money_val(&config.on_demand_used)
+            .or_else(|| raw_config.and_then(|r| money_val(&r.on_demand_used))),
         &mut printed,
     );
     print_money_line(
         "On-demand cap",
-        money_val(&config.on_demand_cap),
+        money_val(&config.on_demand_cap)
+            .or_else(|| raw_config.and_then(|r| money_val(&r.on_demand_cap))),
         &mut printed,
     );
     print_money_line(
@@ -229,11 +304,8 @@ fn print_billing(config: &BillingConfig, subscription: Option<&str>, show_timezo
         money_val(&config.prepaid_balance),
         &mut printed,
     );
-    print_money_line(
-        "Monthly limit",
-        money_val(&config.monthly_limit),
-        &mut printed,
-    );
+    // monthlyLimit is shown above as part of "Monthly billed usage (USD)",
+    // so it is not repeated as a standalone money line.
 
     if !printed {
         println!("Grok Build usage data is not available for your plan.");
@@ -320,20 +392,20 @@ fn humanize_tier(tier: &str) -> String {
     }
 }
 
-pub async fn run(show_timezone: bool) {
-    if let Err(e) = render(show_timezone).await {
+pub async fn run(show_timezone: bool, show_monthly: bool) {
+    if let Err(e) = render(show_timezone, show_monthly).await {
         status::print_provider_error(Provider::Grok, &e);
         std::process::exit(1);
     }
 }
 
-pub async fn render(show_timezone: bool) -> Result<(), String> {
+pub async fn render(show_timezone: bool, show_monthly: bool) -> Result<(), String> {
     let mut creds = crate::grok::auth::read_credentials()?;
     if creds.is_expired() {
         creds = crate::grok::auth::refresh_credentials(&creds).await?;
     }
 
-    let (billing, user) = fetch_usage_with_recovery(creds).await?;
+    let (billing, raw_billing, user) = fetch_usage_with_recovery(creds, show_monthly).await?;
     let subscription = user
         .as_ref()
         .and_then(|u| u.subscription_tier.as_deref())
@@ -348,7 +420,12 @@ pub async fn render(show_timezone: bool) -> Result<(), String> {
         return Ok(());
     };
 
-    print_billing(config, subscription, show_timezone);
+    print_billing(
+        config,
+        raw_billing.config.as_ref(),
+        subscription,
+        show_timezone,
+    );
     Ok(())
 }
 
@@ -358,28 +435,42 @@ fn is_auth_error(error: &str) -> bool {
 
 async fn fetch_usage_with_recovery(
     creds: crate::grok::auth::GrokCredentials,
-) -> Result<(BillingResponse, Option<UserResponse>), String> {
-    match fetch_usage_pair(&creds.access_token).await {
-        Ok(pair) => Ok(pair),
+    show_monthly: bool,
+) -> Result<(BillingResponse, RawBillingResponse, Option<UserResponse>), String> {
+    match fetch_usage_triple(&creds.access_token, show_monthly).await {
+        Ok(triple) => Ok(triple),
         Err(e) if is_auth_error(&e) => {
             let refreshed = crate::grok::auth::refresh_credentials(&creds).await?;
-            fetch_usage_pair(&refreshed.access_token).await
+            fetch_usage_triple(&refreshed.access_token, show_monthly).await
         }
         Err(e) => Err(e),
     }
 }
 
-async fn fetch_usage_pair(
+async fn fetch_usage_triple(
     access_token: &str,
-) -> Result<(BillingResponse, Option<UserResponse>), String> {
+    show_monthly: bool,
+) -> Result<(BillingResponse, RawBillingResponse, Option<UserResponse>), String> {
     let billing = crate::grok::api::fetch_billing(access_token).await?;
+    // The raw `/billing` view carries the unofficial monthly estimate. Only
+    // fetch it when opted in (extra request) — Grok exposes weekly limits
+    // officially, so the monthly figure stays off by default.
+    let raw_billing = if show_monthly {
+        match crate::grok::api::fetch_billing_raw(access_token).await {
+            Ok(raw) => raw,
+            Err(e) if is_auth_error(&e) => return Err(e),
+            Err(_) => RawBillingResponse { config: None },
+        }
+    } else {
+        RawBillingResponse { config: None }
+    };
     // Subscription is best-effort: billing still renders if /user fails.
     let user = match crate::grok::api::fetch_user(access_token).await {
         Ok(user) => Some(user),
         Err(e) if is_auth_error(&e) => return Err(e),
         Err(_) => None,
     };
-    Ok((billing, user))
+    Ok((billing, raw_billing, user))
 }
 
 #[cfg(test)]
@@ -411,5 +502,45 @@ mod tests {
         assert_eq!(humanize_tier("Free"), "Free");
         assert_eq!(humanize_tier("x_premium_plus"), "X Premium+");
         assert_eq!(humanize_tier("SUBSCRIPTION_TIER_SUPER_GROK"), "SuperGrok");
+    }
+
+    #[test]
+    fn credits_usage_zero_when_period_present_but_percent_absent() {
+        // Real response shape for a SuperGrok user at 0% weekly usage: the
+        // API omits creditUsagePercent/productUsage entirely. A present
+        // currentPeriod must read as 0% — not "no data" and not a reason to
+        // fall back to the monthly billing view.
+        let json = r#"{
+            "currentPeriod": {
+                "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                "end": "2026-07-18T06:31:57.450351+00:00"
+            }
+        }"#;
+        let config: BillingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(credits_usage(&config), Some(CreditsUsage::Aggregate(0.0)));
+    }
+
+    #[test]
+    fn credits_usage_uses_product_usage_when_present() {
+        let json = r#"{
+            "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY"},
+            "productUsage": [{"product": "GrokBuild", "usagePercent": 11.0}]
+        }"#;
+        let config: BillingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            credits_usage(&config),
+            Some(CreditsUsage::Products(vec![(
+                "GrokBuild".to_string(),
+                11.0
+            )]))
+        );
+    }
+
+    #[test]
+    fn credits_usage_none_without_current_period() {
+        // No currentPeriod at all → genuinely nothing to render.
+        let json = r#"{"creditUsagePercent": 11.0}"#;
+        let config: BillingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(credits_usage(&config), None);
     }
 }

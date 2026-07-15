@@ -134,6 +134,11 @@ enum GrokCommands {
         /// Show the timezone name next to reset times
         #[arg(long)]
         show_timezone: bool,
+        /// Show the unofficial monthly billing estimate (USD) from the
+        /// /billing proxy. Grok exposes only weekly limits officially; the
+        /// monthly figure is unverified and shown labelled as an estimate.
+        #[arg(long)]
+        monthly: bool,
     },
 }
 
@@ -175,7 +180,10 @@ async fn main() {
             KimiCommands::Usage { show_timezone } => commands::kimi_usage::run(show_timezone).await,
         },
         Commands::Grok { command } => match command {
-            GrokCommands::Usage { show_timezone } => commands::grok_usage::run(show_timezone).await,
+            GrokCommands::Usage {
+                show_timezone,
+                monthly,
+            } => commands::grok_usage::run(show_timezone, monthly).await,
         },
         Commands::Update {
             no_post_check,
@@ -401,9 +409,35 @@ mod tests {
 
         match cli.command {
             Commands::Grok {
-                command: GrokCommands::Usage { show_timezone },
-            } => assert!(show_timezone),
+                command:
+                    GrokCommands::Usage {
+                        show_timezone,
+                        monthly,
+                    },
+            } => {
+                assert!(show_timezone);
+                assert!(!monthly);
+            }
             _ => panic!("expected grok usage command"),
+        }
+    }
+
+    #[test]
+    fn grok_usage_parses_monthly() {
+        let cli = Cli::try_parse_from(["claudex", "grok", "usage", "--monthly"]).unwrap();
+
+        match cli.command {
+            Commands::Grok {
+                command:
+                    GrokCommands::Usage {
+                        show_timezone,
+                        monthly,
+                    },
+            } => {
+                assert!(!show_timezone);
+                assert!(monthly);
+            }
+            _ => panic!("expected grok usage with --monthly"),
         }
     }
 
@@ -413,8 +447,15 @@ mod tests {
 
         match cli.command {
             Commands::Grok {
-                command: GrokCommands::Usage { show_timezone },
-            } => assert!(!show_timezone),
+                command:
+                    GrokCommands::Usage {
+                        show_timezone,
+                        monthly,
+                    },
+            } => {
+                assert!(!show_timezone);
+                assert!(!monthly);
+            }
             _ => panic!("expected grok usage via grok-build alias"),
         }
     }
