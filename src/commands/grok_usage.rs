@@ -4,7 +4,8 @@ use terminal_size::{Width, terminal_size};
 
 use crate::commands::status::{self, Provider};
 use crate::grok::api::{
-    BillingConfig, BillingResponse, MoneyVal, RawBillingConfig, RawBillingResponse, UserResponse,
+    BillingConfig, BillingResponse, MoneyVal, RawBillingConfig, RawBillingResponse,
+    SettingsResponse, UserResponse,
 };
 
 const FILL_CHAR: char = '\u{2588}';
@@ -209,18 +210,8 @@ fn print_billing(
     subscription: Option<&str>,
     show_timezone: bool,
 ) {
-    if let Some(tier) = subscription
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            config
-                .subscription_tier
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-        })
-    {
-        println!("{} {}\n", "Subscription:".bold(), humanize_tier(tier));
+    if let Some(tier) = subscription.map(str::trim).filter(|s| !s.is_empty()) {
+        println!("{} {}\n", "Subscription:".bold(), tier);
     }
 
     // The credits view's `currentPeriod` is the real usage window for
@@ -352,7 +343,7 @@ fn humanize_tier(tier: &str) -> String {
 
     match key.as_str() {
         // SuperGrok (standard paid) — API often uses the legacy code "GrokPro".
-        "grokpro" | "pro" | "supergrok" | "super" => "SuperGrok".to_string(),
+        "grokpro" | "supergrokpro" | "pro" | "supergrok" | "super" => "SuperGrok".to_string(),
         // SuperGrok Heavy
         "supergrokheavy" | "grokheavy" | "heavy" | "superheavy" => "SuperGrok Heavy".to_string(),
         // SuperGrok Lite
@@ -392,6 +383,72 @@ fn humanize_tier(tier: &str) -> String {
     }
 }
 
+/// Choose the most specific subscription tier from the available sources.
+///
+/// Grok's `/user` and `/billing` endpoints can return different (both
+/// legitimate) tier strings for the same account — e.g. `/user` may return
+/// the coarse code `"SuperGrok"` while `/billing` returns the specific code
+/// `"SuperGrokHeavy"`. Prefer the one that humanizes to the longest/most
+/// specific consumer-facing name when one is clearly a specialization of
+/// the other; otherwise keep the first source.
+fn choose_tier<'a>(a: Option<&'a str>, b: Option<&'a str>) -> Option<&'a str> {
+    let a = a.map(str::trim).filter(|s| !s.is_empty());
+    let b = b.map(str::trim).filter(|s| !s.is_empty());
+    let Some(a) = a else {
+        return b;
+    };
+    let Some(b) = b else {
+        return Some(a);
+    };
+    let ha = humanize_tier(a);
+    let hb = humanize_tier(b);
+    if ha == hb {
+        return Some(a);
+    }
+    if hb.starts_with(&ha) && hb.len() > ha.len() {
+        return Some(b);
+    }
+    if ha.starts_with(&hb) && ha.len() > hb.len() {
+        return Some(a);
+    }
+    Some(a)
+}
+
+/// Resolve the subscription tier string to display.
+///
+/// Grok Build sources the canonical display name from CCP `/settings`
+/// (`subscription_tier_display`). If that is present we use it verbatim so
+/// "SuperGrok Heavy" / "X Premium+" etc. are preserved exactly. Otherwise we
+/// fall back to the settings tier code and then to the merged `/user` +
+/// `/billing` tier codes, humanizing legacy API codes such as `GrokPro`.
+fn resolve_display_tier(
+    settings: &Option<SettingsResponse>,
+    user: &Option<UserResponse>,
+    billing: &BillingResponse,
+) -> Option<String> {
+    if let Some(display) = settings
+        .as_ref()
+        .and_then(|s| s.subscription_tier_display.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(display.to_string());
+    }
+
+    let settings_tier = settings
+        .as_ref()
+        .and_then(|s| s.subscription_tier.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let user_tier = user.as_ref().and_then(|u| u.subscription_tier.as_deref());
+    let billing_tier = billing
+        .config
+        .as_ref()
+        .and_then(|c| c.subscription_tier.as_deref());
+
+    choose_tier(settings_tier, choose_tier(user_tier, billing_tier)).map(humanize_tier)
+}
+
 pub async fn run(show_timezone: bool, show_monthly: bool) {
     if let Err(e) = render(show_timezone, show_monthly).await {
         status::print_provider_error(Provider::Grok, &e);
@@ -405,16 +462,13 @@ pub async fn render(show_timezone: bool, show_monthly: bool) -> Result<(), Strin
         creds = crate::grok::auth::refresh_credentials(&creds).await?;
     }
 
-    let (billing, raw_billing, user) = fetch_usage_with_recovery(creds, show_monthly).await?;
-    let subscription = user
-        .as_ref()
-        .and_then(|u| u.subscription_tier.as_deref())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let (billing, raw_billing, user, settings) =
+        fetch_usage_with_recovery(creds, show_monthly).await?;
+    let subscription = resolve_display_tier(&settings, &user, &billing);
 
     let Some(config) = billing.config.as_ref() else {
-        if let Some(tier) = subscription {
-            println!("{} {}\n", "Subscription:".bold(), humanize_tier(tier));
+        if let Some(tier) = &subscription {
+            println!("{} {}\n", "Subscription:".bold(), tier);
         }
         println!("Grok Build usage data is not available for your plan.");
         return Ok(());
@@ -423,7 +477,7 @@ pub async fn render(show_timezone: bool, show_monthly: bool) -> Result<(), Strin
     print_billing(
         config,
         raw_billing.config.as_ref(),
-        subscription,
+        subscription.as_deref(),
         show_timezone,
     );
     Ok(())
@@ -436,21 +490,37 @@ fn is_auth_error(error: &str) -> bool {
 async fn fetch_usage_with_recovery(
     creds: crate::grok::auth::GrokCredentials,
     show_monthly: bool,
-) -> Result<(BillingResponse, RawBillingResponse, Option<UserResponse>), String> {
-    match fetch_usage_triple(&creds.access_token, show_monthly).await {
-        Ok(triple) => Ok(triple),
+) -> Result<
+    (
+        BillingResponse,
+        RawBillingResponse,
+        Option<UserResponse>,
+        Option<SettingsResponse>,
+    ),
+    String,
+> {
+    match fetch_usage_data(&creds.access_token, show_monthly).await {
+        Ok(data) => Ok(data),
         Err(e) if is_auth_error(&e) => {
             let refreshed = crate::grok::auth::refresh_credentials(&creds).await?;
-            fetch_usage_triple(&refreshed.access_token, show_monthly).await
+            fetch_usage_data(&refreshed.access_token, show_monthly).await
         }
         Err(e) => Err(e),
     }
 }
 
-async fn fetch_usage_triple(
+async fn fetch_usage_data(
     access_token: &str,
     show_monthly: bool,
-) -> Result<(BillingResponse, RawBillingResponse, Option<UserResponse>), String> {
+) -> Result<
+    (
+        BillingResponse,
+        RawBillingResponse,
+        Option<UserResponse>,
+        Option<SettingsResponse>,
+    ),
+    String,
+> {
     let billing = crate::grok::api::fetch_billing(access_token).await?;
     // The raw `/billing` view carries the unofficial monthly estimate. Only
     // fetch it when opted in (extra request) — Grok exposes weekly limits
@@ -464,13 +534,19 @@ async fn fetch_usage_triple(
     } else {
         RawBillingResponse { config: None }
     };
-    // Subscription is best-effort: billing still renders if /user fails.
+    // Subscription and settings are best-effort: billing still renders if
+    // these endpoints fail.
     let user = match crate::grok::api::fetch_user(access_token).await {
         Ok(user) => Some(user),
         Err(e) if is_auth_error(&e) => return Err(e),
         Err(_) => None,
     };
-    Ok((billing, raw_billing, user))
+    let settings = match crate::grok::api::fetch_settings(access_token).await {
+        Ok(settings) => Some(settings),
+        Err(e) if is_auth_error(&e) => return Err(e),
+        Err(_) => None,
+    };
+    Ok((billing, raw_billing, user, settings))
 }
 
 #[cfg(test)]
@@ -494,6 +570,7 @@ mod tests {
     fn humanize_tier_maps_official_plan_names() {
         // API legacy code for the standard SuperGrok plan.
         assert_eq!(humanize_tier("GrokPro"), "SuperGrok");
+        assert_eq!(humanize_tier("SuperGrokPro"), "SuperGrok");
         assert_eq!(humanize_tier("SuperGrok"), "SuperGrok");
         assert_eq!(humanize_tier("supergrok"), "SuperGrok");
         assert_eq!(humanize_tier("SuperGrokHeavy"), "SuperGrok Heavy");
@@ -502,6 +579,94 @@ mod tests {
         assert_eq!(humanize_tier("Free"), "Free");
         assert_eq!(humanize_tier("x_premium_plus"), "X Premium+");
         assert_eq!(humanize_tier("SUBSCRIPTION_TIER_SUPER_GROK"), "SuperGrok");
+        assert_eq!(
+            humanize_tier("SUBSCRIPTION_TIER_SUPER_GROK_HEAVY"),
+            "SuperGrok Heavy"
+        );
+    }
+
+    #[test]
+    fn choose_tier_prefers_more_specific_name() {
+        // /user returns the coarse code while /billing returns the specific code.
+        assert_eq!(
+            choose_tier(Some("SuperGrok"), Some("SuperGrokHeavy")),
+            Some("SuperGrokHeavy")
+        );
+        assert_eq!(
+            choose_tier(Some("GrokPro"), Some("SuperGrokHeavy")),
+            Some("SuperGrokHeavy")
+        );
+        assert_eq!(
+            choose_tier(Some("SuperGrokHeavy"), Some("SuperGrok")),
+            Some("SuperGrokHeavy")
+        );
+        assert_eq!(
+            choose_tier(Some("SuperGrok"), Some("SuperGrok Lite")),
+            Some("SuperGrok Lite")
+        );
+        // Falls back when only one source is present.
+        assert_eq!(choose_tier(Some("SuperGrok"), None), Some("SuperGrok"));
+        assert_eq!(
+            choose_tier(None, Some("SuperGrokHeavy")),
+            Some("SuperGrokHeavy")
+        );
+        // Equal humanized names keep the first source.
+        assert_eq!(
+            choose_tier(Some("GrokPro"), Some("SuperGrok")),
+            Some("GrokPro")
+        );
+    }
+
+    #[test]
+    fn resolve_display_tier_prefers_settings_display_name() {
+        let settings = SettingsResponse {
+            subscription_tier: Some("SuperGrok".to_string()),
+            subscription_tier_display: Some("SuperGrok Heavy".to_string()),
+        };
+        let user = UserResponse {
+            subscription_tier: Some("GrokPro".to_string()),
+        };
+        let billing = BillingResponse { config: None };
+        assert_eq!(
+            resolve_display_tier(&Some(settings), &Some(user), &billing),
+            Some("SuperGrok Heavy".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_display_tier_humanizes_codes_when_no_display_name() {
+        let settings = SettingsResponse {
+            subscription_tier: Some("GrokPro".to_string()),
+            subscription_tier_display: None,
+        };
+        let billing = BillingResponse { config: None };
+        assert_eq!(
+            resolve_display_tier(&Some(settings), &None, &billing),
+            Some("SuperGrok".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_display_tier_falls_back_to_user_and_billing() {
+        let billing = BillingResponse {
+            config: Some(BillingConfig {
+                current_period: None,
+                credit_usage_percent: None,
+                monthly_limit: None,
+                on_demand_cap: None,
+                on_demand_used: None,
+                prepaid_balance: None,
+                product_usage: None,
+                is_unified_billing_user: None,
+                billing_period_start: None,
+                billing_period_end: None,
+                subscription_tier: Some("SuperGrokHeavy".to_string()),
+            }),
+        };
+        assert_eq!(
+            resolve_display_tier(&None, &None, &billing),
+            Some("SuperGrok Heavy".to_string())
+        );
     }
 
     #[test]

@@ -1,6 +1,16 @@
 use serde::Deserialize;
 use std::time::Duration;
 
+fn debug_enabled() -> bool {
+    std::env::var("CLAUDEX_DEBUG_GROK").is_ok_and(|v| !v.is_empty())
+}
+
+fn debug_print(what: &str, body: &str) {
+    if debug_enabled() {
+        eprintln!("[claudex debug] {what}: {body}");
+    }
+}
+
 const DEFAULT_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
 #[derive(Debug, Deserialize)]
@@ -89,9 +99,12 @@ pub async fn fetch_billing(access_token: &str) -> Result<BillingResponse, String
 
     check_auth_status(response.status(), "Grok billing data")?;
 
-    response
-        .json::<BillingResponse>()
+    let body = response
+        .text()
         .await
+        .map_err(|e| format!("failed to read Grok billing data: {e}"))?;
+    debug_print("billing", &body);
+    serde_json::from_str::<BillingResponse>(&body)
         .map_err(|e| format!("failed to parse Grok billing data: {e}"))
 }
 
@@ -115,10 +128,48 @@ pub async fn fetch_billing_raw(access_token: &str) -> Result<RawBillingResponse,
 
     check_auth_status(response.status(), "Grok billing data")?;
 
-    response
-        .json::<RawBillingResponse>()
+    let body = response
+        .text()
         .await
+        .map_err(|e| format!("failed to read Grok billing data: {e}"))?;
+    debug_print("billing raw", &body);
+    serde_json::from_str::<RawBillingResponse>(&body)
         .map_err(|e| format!("failed to parse Grok billing data: {e}"))
+}
+
+/// Remote settings from `GET /v1/settings`.
+///
+/// Grok Build enriches billing responses with `subscription_tier_display`
+/// from this endpoint; it is the canonical source for the user-facing
+/// subscription name (e.g. "SuperGrok Heavy").
+#[derive(Debug, Deserialize)]
+pub struct SettingsResponse {
+    pub subscription_tier: Option<String>,
+    pub subscription_tier_display: Option<String>,
+}
+
+/// Fetch remote settings, including the user-facing subscription tier.
+pub async fn fetch_settings(access_token: &str) -> Result<SettingsResponse, String> {
+    let (client, version) = http_client()?;
+    let response = client
+        .get(settings_url(&base_url()))
+        .bearer_auth(access_token)
+        .header("Accept", "application/json")
+        .header("User-Agent", format!("grok-shell/{version}"))
+        .header("x-grok-client-version", &version)
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch Grok settings: {e}"))?;
+
+    check_auth_status(response.status(), "Grok settings")?;
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("failed to read Grok settings: {e}"))?;
+    debug_print("settings", &body);
+    serde_json::from_str::<SettingsResponse>(&body)
+        .map_err(|e| format!("failed to parse Grok settings: {e}"))
 }
 
 /// Fetch account profile, including subscription tier when available.
@@ -136,9 +187,12 @@ pub async fn fetch_user(access_token: &str) -> Result<UserResponse, String> {
 
     check_auth_status(response.status(), "Grok user data")?;
 
-    response
-        .json::<UserResponse>()
+    let body = response
+        .text()
         .await
+        .map_err(|e| format!("failed to read Grok user data: {e}"))?;
+    debug_print("user", &body);
+    serde_json::from_str::<UserResponse>(&body)
         .map_err(|e| format!("failed to parse Grok user data: {e}"))
 }
 
@@ -177,6 +231,10 @@ fn user_url(base_url: &str) -> String {
         "{}/user?include=subscription",
         base_url.trim_end_matches('/')
     )
+}
+
+fn settings_url(base_url: &str) -> String {
+    format!("{}/settings", base_url.trim_end_matches('/'))
 }
 
 fn grok_client_version() -> String {
@@ -256,6 +314,14 @@ mod tests {
     }
 
     #[test]
+    fn settings_url_is_root() {
+        assert_eq!(
+            settings_url("https://cli-chat-proxy.grok.com/v1/"),
+            "https://cli-chat-proxy.grok.com/v1/settings"
+        );
+    }
+
+    #[test]
     fn deserializes_user_subscription_tier() {
         let json = r#"{
             "userId": "u-1",
@@ -265,5 +331,19 @@ mod tests {
         }"#;
         let user: UserResponse = serde_json::from_str(json).unwrap();
         assert_eq!(user.subscription_tier.as_deref(), Some("GrokPro"));
+    }
+
+    #[test]
+    fn deserializes_settings_subscription_tier_display() {
+        let json = r#"{
+            "subscription_tier": "SuperGrok",
+            "subscription_tier_display": "SuperGrok Heavy"
+        }"#;
+        let settings: SettingsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.subscription_tier.as_deref(), Some("SuperGrok"));
+        assert_eq!(
+            settings.subscription_tier_display.as_deref(),
+            Some("SuperGrok Heavy")
+        );
     }
 }
