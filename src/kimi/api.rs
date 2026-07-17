@@ -104,14 +104,22 @@ fn parse_managed_usage_payload(payload: &Value) -> ManagedUsage {
 }
 
 fn subscription_label(record: &Map<String, Value>) -> Option<String> {
-    plan_from_kimi_code_credits(record).or_else(|| {
+    plan_from_parallel_limit(record).or_else(|| {
         first_string(record, &["subscription", "plan"])
             .map(plan_label)
             .filter(|label| !label.is_empty())
     })
 }
 
-fn plan_from_kimi_code_credits(record: &Map<String, Value>) -> Option<String> {
+/// Map `/usages` `parallel.limit` to the Kimi Code plan display name.
+///
+/// Observed values (and legacy multipliers still seen in the wild):
+/// - 1 → Andante
+/// - 4 → Moderato
+/// - 20 → Allegretto
+/// - 30 → Allegro (current API for Allegro accounts)
+/// - 60 → Allegro (older multiplier encoding)
+fn plan_from_parallel_limit(record: &Map<String, Value>) -> Option<String> {
     let limit = record
         .get("parallel")
         .and_then(Value::as_object)
@@ -121,7 +129,7 @@ fn plan_from_kimi_code_credits(record: &Map<String, Value>) -> Option<String> {
         1 => Some("Andante".to_string()),
         4 => Some("Moderato".to_string()),
         20 => Some("Allegretto".to_string()),
-        60 => Some("Allegro".to_string()),
+        30 | 60 => Some("Allegro".to_string()),
         _ => None,
     }
 }
@@ -344,8 +352,8 @@ mod tests {
     fn parses_summary_and_rolling_limit() {
         let payload: Value = serde_json::from_str(
             r#"{
-                "user": { "membership": { "level": "LEVEL_INTERMEDIATE" } },
-                "parallel": { "limit": "20" },
+                "user": { "membership": { "level": "LEVEL_ADVANCED" } },
+                "parallel": { "limit": "30" },
                 "usage": {
                     "limit": "100",
                     "remaining": "98",
@@ -368,7 +376,7 @@ mod tests {
 
         let usage = parse_managed_usage_payload(&payload);
 
-        assert_eq!(usage.subscription.as_deref(), Some("Allegretto"));
+        assert_eq!(usage.subscription.as_deref(), Some("Allegro"));
         assert_eq!(
             usage.summary,
             Some(UsageRow {
@@ -407,6 +415,27 @@ mod tests {
 
         assert_eq!(subscription_label(record), None);
         assert_eq!(membership_level(record).as_deref(), Some("Intermediate"));
+    }
+
+    #[test]
+    fn parallel_limit_maps_to_plan_names() {
+        for (limit, plan) in [
+            (1, "Andante"),
+            (4, "Moderato"),
+            (20, "Allegretto"),
+            (30, "Allegro"),
+            (60, "Allegro"),
+        ] {
+            let payload: Value =
+                serde_json::from_str(&format!(r#"{{ "parallel": {{ "limit": "{limit}" }} }}"#))
+                    .unwrap();
+            let record = payload.as_object().unwrap();
+            assert_eq!(
+                plan_from_parallel_limit(record).as_deref(),
+                Some(plan),
+                "parallel.limit={limit}"
+            );
+        }
     }
 
     #[test]
