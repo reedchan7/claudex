@@ -5,7 +5,7 @@ use terminal_size::{Width, terminal_size};
 use crate::api::{ExtraUsage, RateLimit, UsageLimit};
 use crate::commands::status::{self, Provider};
 
-fn format_duration_short(seconds: i64) -> String {
+pub fn format_duration_short(seconds: i64) -> String {
     if seconds <= 0 {
         return "now".to_string();
     }
@@ -272,6 +272,147 @@ pub async fn run(show_timezone: bool) {
         status::print_provider_error(Provider::Claude, &e);
         std::process::exit(1);
     }
+}
+
+pub async fn run_json(show_timezone: bool) {
+    let snapshot = crate::snapshot::ProviderSnapshot::from_result(
+        Provider::Claude,
+        snapshot(show_timezone).await,
+    );
+    crate::commands::usage_all::print_json(vec![snapshot]);
+}
+
+// --- Snapshot support (JSON output / claudex-bar). Keep in sync with the
+// print_* functions above; see src/snapshot.rs.
+
+fn bar_row(limit: &RateLimit, show_timezone: bool) -> crate::snapshot::Row {
+    let utilization = limit.utilization.unwrap_or(0.0);
+    let detail = limit.resets_at.as_ref().map(|resets_at| {
+        let reset_str = format_reset_time_with_options(resets_at, show_timezone);
+        match time_remaining(resets_at) {
+            Some(rem) => format!("Resets {reset_str}, {rem} left"),
+            None => format!("Resets {reset_str}"),
+        }
+    });
+    crate::snapshot::Row::bar(
+        utilization,
+        format!("{utilization:.0}% used"),
+        detail,
+        limit.resets_at.clone(),
+    )
+}
+
+fn titled_limit_block(
+    title: &str,
+    limit: &RateLimit,
+    show_timezone: bool,
+) -> crate::snapshot::Block {
+    crate::snapshot::Block::titled(title, vec![bar_row(limit, show_timezone)])
+}
+
+fn extra_usage_block(extra: &ExtraUsage) -> crate::snapshot::Block {
+    if !extra.is_enabled {
+        return crate::snapshot::Block::untitled(vec![crate::snapshot::Row::text(
+            "Usage credits   off",
+        )]);
+    }
+    match extra.monthly_limit {
+        None => crate::snapshot::Block::untitled(vec![crate::snapshot::Row::text(
+            "Usage credits   Unlimited",
+        )]),
+        Some(monthly_limit) => {
+            let used = extra.used_credits.unwrap_or(0);
+            let utilization = extra.utilization.unwrap_or(0.0);
+            crate::snapshot::Block::titled(
+                "Extra usage",
+                vec![
+                    crate::snapshot::Row::bar(
+                        utilization,
+                        format!("{utilization:.0}% used"),
+                        None,
+                        None,
+                    ),
+                    crate::snapshot::Row::text(format!(
+                        "${:.2} / ${:.2} spent",
+                        used as f64 / 100.0,
+                        monthly_limit as f64 / 100.0
+                    )),
+                ],
+            )
+        }
+    }
+}
+
+fn build_blocks(
+    utilization: &crate::api::Utilization,
+    subscription: Option<String>,
+    show_timezone: bool,
+) -> Vec<crate::snapshot::Block> {
+    let mut blocks = Vec::new();
+    if let Some(subscription) = subscription {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text(format!("Subscription: {subscription}")),
+        ]));
+    }
+
+    let mut limit_blocks: Vec<crate::snapshot::Block> = utilization
+        .limits
+        .iter()
+        .filter_map(|limit| {
+            limit_title(limit).map(|title| {
+                titled_limit_block(&title, &rate_limit_from_usage_limit(limit), show_timezone)
+            })
+        })
+        .collect();
+
+    if limit_blocks.is_empty() {
+        let legacy: &[(&str, Option<&RateLimit>)] = &[
+            ("Current session (5h)", utilization.five_hour.as_ref()),
+            ("Current week (all models)", utilization.seven_day.as_ref()),
+            (
+                "Current week (Sonnet only)",
+                utilization.seven_day_sonnet.as_ref(),
+            ),
+        ];
+        for (title, limit) in legacy {
+            if let Some(limit) = limit {
+                limit_blocks.push(titled_limit_block(title, limit, show_timezone));
+            }
+        }
+    }
+
+    if limit_blocks.is_empty() {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text("/usage is only available for subscription plans."),
+        ]));
+        return blocks;
+    }
+
+    blocks.extend(limit_blocks);
+
+    if let Some(extra) = &utilization.extra_usage {
+        blocks.push(extra_usage_block(extra));
+    }
+
+    blocks
+}
+
+pub async fn snapshot(show_timezone: bool) -> Result<crate::snapshot::ProviderSnapshot, String> {
+    let session = crate::auth::read_oauth_session()?;
+    let subscription = format_subscription_label(
+        session.rate_limit_tier.as_deref(),
+        session.subscription_type.as_deref(),
+    );
+
+    let version = crate::auth::get_claude_version();
+    let user_agent = format!("claude-code/{version}");
+
+    let utilization = fetch_utilization_with_recovery(session, &user_agent).await?;
+
+    Ok(crate::snapshot::ProviderSnapshot::ok(
+        Provider::Claude,
+        build_blocks(&utilization, subscription, show_timezone),
+    ))
 }
 
 pub async fn render(show_timezone: bool) -> Result<(), String> {
@@ -591,5 +732,103 @@ mod tests {
             format_local(dt, today, "Asia/Shanghai", true),
             "May 30 at 3am (Asia/Shanghai)"
         );
+    }
+
+    fn utilization_from_json(json: &str) -> crate::api::Utilization {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn build_blocks_from_limits_array_includes_scoped_week() {
+        let utilization = utilization_from_json(
+            r#"{
+                "limits": [
+                    {"kind": "session", "percent": 34, "resets_at": "2099-05-25T06:30:00+00:00", "scope": null},
+                    {"kind": "weekly_all", "percent": 6, "resets_at": "2099-05-29T19:00:00+00:00", "scope": null},
+                    {"kind": "weekly_scoped", "percent": 86, "resets_at": "2099-05-29T19:00:00+00:00",
+                     "scope": {"model": {"id": null, "display_name": "Fable"}}}
+                ]
+            }"#,
+        );
+        let blocks = build_blocks(&utilization, Some("Max".to_string()), false);
+
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0].title, None);
+        assert_eq!(blocks[1].title.as_deref(), Some("Current session (5h)"));
+        assert_eq!(
+            blocks[2].title.as_deref(),
+            Some("Current week (all models)")
+        );
+        assert_eq!(blocks[3].title.as_deref(), Some("Current week (Fable)"));
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                detail,
+                resets_at,
+            } => {
+                assert_eq!(*percent, 34.0);
+                assert_eq!(text, "34% used");
+                assert!(detail.as_deref().unwrap().starts_with("Resets "));
+                assert!(resets_at.is_some());
+            }
+            _ => panic!("expected bar row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_falls_back_to_legacy_limits() {
+        let utilization = utilization_from_json(
+            r#"{
+                "five_hour": {"utilization": 26.0, "resets_at": "2099-05-25T06:30:00+00:00"},
+                "seven_day": null,
+                "seven_day_sonnet": null,
+                "extra_usage": {"is_enabled": false, "monthly_limit": null, "used_credits": null, "utilization": null}
+            }"#,
+        );
+        let blocks = build_blocks(&utilization, None, false);
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].title.as_deref(), Some("Current session (5h)"));
+        assert_eq!(blocks[1].title, None);
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Usage credits   off"),
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_reports_non_subscription_plan() {
+        let utilization = utilization_from_json(
+            r#"{"five_hour": null, "seven_day": null, "seven_day_sonnet": null, "extra_usage": null}"#,
+        );
+        let blocks = build_blocks(&utilization, None, false);
+
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert_eq!(text, "/usage is only available for subscription plans.")
+            }
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_extra_usage_enabled_has_spent_line() {
+        let utilization = utilization_from_json(
+            r#"{
+                "five_hour": {"utilization": 1.0, "resets_at": null},
+                "extra_usage": {"is_enabled": true, "monthly_limit": 5000, "used_credits": 1250, "utilization": 25.0}
+            }"#,
+        );
+        let blocks = build_blocks(&utilization, None, false);
+        let extra = blocks.last().unwrap();
+
+        assert_eq!(extra.title.as_deref(), Some("Extra usage"));
+        assert_eq!(extra.rows.len(), 2);
+        match &extra.rows[1] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "$12.50 / $50.00 spent"),
+            _ => panic!("expected text row"),
+        }
     }
 }

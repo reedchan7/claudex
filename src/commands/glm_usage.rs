@@ -160,6 +160,114 @@ pub async fn run(show_timezone: bool, region_override: Option<&str>) {
     }
 }
 
+pub async fn run_json(show_timezone: bool, region_override: Option<&str>) {
+    let snapshot = crate::snapshot::ProviderSnapshot::from_result(
+        Provider::Glm,
+        snapshot(show_timezone, region_override).await,
+    );
+    crate::commands::usage_all::print_json(vec![snapshot]);
+}
+
+// --- Snapshot support (JSON output / claudex-bar). Keep in sync with the
+// print_* functions above; see src/snapshot.rs.
+
+fn bar_row(limit: &QuotaLimit, show_timezone: bool) -> crate::snapshot::Row {
+    let used_percent = limit.percentage.unwrap_or(0.0);
+    let detail = limit.next_reset_time.and_then(|reset_ms| {
+        let reset_str = format_reset_from_millis_with_options(reset_ms, show_timezone);
+        if reset_str.is_empty() {
+            return None;
+        }
+        Some(match time_remaining_from_millis(reset_ms) {
+            Some(rem) => format!("Resets {reset_str}, {rem} left"),
+            None => format!("Resets {reset_str}"),
+        })
+    });
+    let resets_at = limit
+        .next_reset_time
+        .and_then(DateTime::from_timestamp_millis)
+        .map(|dt| dt.to_rfc3339());
+    crate::snapshot::Row::bar(
+        used_percent,
+        format!("{used_percent:.0}% used"),
+        detail,
+        resets_at,
+    )
+}
+
+fn limit_block(limit: &QuotaLimit, show_timezone: bool) -> crate::snapshot::Block {
+    let label = limit_label(limit.kind.as_deref(), limit.unit);
+    let mut rows = vec![bar_row(limit, show_timezone)];
+
+    // MCP quota carries absolute counters and a per-tool breakdown.
+    if let (Some(used), Some(total)) = (limit.current_value, limit.usage) {
+        rows.push(crate::snapshot::Row::text(format!("Used {used} / {total}")));
+        for detail in &limit.usage_details {
+            if let Some(code) = detail.model_code.as_deref() {
+                let tool_used = detail.usage.unwrap_or(0);
+                rows.push(crate::snapshot::Row::text(format!("  {code}: {tool_used}")));
+            }
+        }
+    }
+
+    crate::snapshot::Block::titled(label, rows)
+}
+
+fn build_blocks(
+    usage: &crate::glm::api::UsageData,
+    show_timezone: bool,
+) -> Vec<crate::snapshot::Block> {
+    let mut blocks = Vec::new();
+
+    if usage.limits.is_empty() {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text("GLM usage data is not available for your plan."),
+        ]));
+        return blocks;
+    }
+
+    if let Some(level) = usage
+        .level
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text(format!("Subscription: {}", capitalize(level))),
+        ]));
+    }
+
+    // Sort limits: Session limit first, then Week limit, then MCP quota, then
+    // others — the same order render() prints them.
+    let mut limits: Vec<&QuotaLimit> = usage.limits.iter().collect();
+    limits.sort_by_key(|limit| match (limit.kind.as_deref(), limit.unit) {
+        (Some("TOKENS_LIMIT"), Some(3)) => 1,
+        (Some("TOKENS_LIMIT"), Some(6)) => 2,
+        (Some("TIME_LIMIT"), _) => 3,
+        _ => 4,
+    });
+
+    blocks.extend(
+        limits
+            .into_iter()
+            .map(|limit| limit_block(limit, show_timezone)),
+    );
+    blocks
+}
+
+pub async fn snapshot(
+    show_timezone: bool,
+    region_override: Option<&str>,
+) -> Result<crate::snapshot::ProviderSnapshot, String> {
+    let creds = crate::glm::auth::resolve_credentials(region_override)?;
+    let usage = crate::glm::api::fetch_usage(creds.region.base_url(), &creds.api_key).await?;
+
+    Ok(crate::snapshot::ProviderSnapshot::ok(
+        Provider::Glm,
+        build_blocks(&usage, show_timezone),
+    ))
+}
+
 pub async fn render(show_timezone: bool, region_override: Option<&str>) -> Result<(), String> {
     let creds = crate::glm::auth::resolve_credentials(region_override)?;
     let mut usage = crate::glm::api::fetch_usage(creds.region.base_url(), &creds.api_key).await?;
@@ -246,5 +354,124 @@ mod tests {
         assert!(time_remaining_from_millis(future).unwrap().contains('h'));
         let past = Local::now().timestamp_millis() - 1000;
         assert!(time_remaining_from_millis(past).is_none());
+    }
+
+    fn usage_from_json(json: &str) -> crate::glm::api::UsageData {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn build_blocks_maps_full_plan_with_mcp_breakdown() {
+        let usage = usage_from_json(
+            r#"{
+                "level": "pro",
+                "limits": [
+                    { "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 1,
+                      "nextResetTime": 1782411163852 },
+                    { "type": "TOKENS_LIMIT", "unit": 6, "number": 1, "percentage": 3,
+                      "nextResetTime": 1782960156979 },
+                    { "type": "TIME_LIMIT", "unit": 5, "number": 1, "usage": 1000,
+                      "currentValue": 0, "remaining": 1000, "percentage": 0,
+                      "nextResetTime": 1784947356991,
+                      "usageDetails": [
+                        { "modelCode": "search-prime", "usage": 0 },
+                        { "modelCode": "web-reader", "usage": 0 },
+                        { "modelCode": "zread", "usage": 0 }
+                      ] }
+                ]
+            }"#,
+        );
+        let blocks = build_blocks(&usage, false);
+
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0].title, None);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Subscription: Pro"),
+            _ => panic!("expected text row"),
+        }
+
+        assert_eq!(blocks[1].title.as_deref(), Some("Current session (5h)"));
+        assert_eq!(blocks[2].title.as_deref(), Some("Current week"));
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                detail,
+                resets_at,
+            } => {
+                assert_eq!(*percent, 1.0);
+                assert_eq!(text, "1% used");
+                assert!(detail.as_deref().unwrap().starts_with("Resets "));
+                let ts = resets_at.as_deref().unwrap();
+                assert!(DateTime::parse_from_rfc3339(ts).is_ok());
+            }
+            _ => panic!("expected bar row"),
+        }
+
+        assert_eq!(blocks[3].title.as_deref(), Some("MCP quota"));
+        assert_eq!(blocks[3].rows.len(), 5);
+        match &blocks[3].rows[1] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Used 0 / 1000"),
+            _ => panic!("expected text row"),
+        }
+        match &blocks[3].rows[2] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "  search-prime: 0"),
+            _ => panic!("expected text row"),
+        }
+        match &blocks[3].rows[4] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "  zread: 0"),
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_sorts_limits_session_week_mcp_then_others() {
+        let usage = usage_from_json(
+            r#"{
+                "level": null,
+                "limits": [
+                    { "type": "TIME_LIMIT", "unit": 5, "percentage": 0 },
+                    { "type": "TOKENS_LIMIT", "unit": 6, "percentage": 3 },
+                    { "type": "UNKNOWN_LIMIT", "unit": 9, "percentage": 50 },
+                    { "type": "TOKENS_LIMIT", "unit": 3, "percentage": 1 }
+                ]
+            }"#,
+        );
+        let blocks = build_blocks(&usage, false);
+
+        // No subscription block without a level; limits are reordered like
+        // render() does: session, week, MCP quota, then others.
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0].title.as_deref(), Some("Current session (5h)"));
+        assert_eq!(blocks[1].title.as_deref(), Some("Current week"));
+        assert_eq!(blocks[2].title.as_deref(), Some("MCP quota"));
+        assert_eq!(blocks[3].title.as_deref(), Some("Quota"));
+
+        // No reset timestamp means no detail line and no resets_at.
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Bar {
+                detail, resets_at, ..
+            } => {
+                assert!(detail.is_none());
+                assert!(resets_at.is_none());
+            }
+            _ => panic!("expected bar row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_empty_limits_reports_plan_unavailable() {
+        let usage = usage_from_json(r#"{ "level": "pro", "limits": [] }"#);
+        let blocks = build_blocks(&usage, false);
+
+        // render() returns before printing the subscription in this branch.
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].title, None);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert_eq!(text, "GLM usage data is not available for your plan.")
+            }
+            _ => panic!("expected text row"),
+        }
     }
 }

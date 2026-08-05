@@ -1,4 +1,4 @@
-.PHONY: help build release test fmt fmt-check lint check run install uninstall clean \
+.PHONY: help build release bar test fmt fmt-check lint check run install uninstall clean \
 	setup-hooks version set-version bump-patch bump-minor bump-major tag-version
 
 # Default target: list available commands
@@ -6,6 +6,7 @@ help:
 	@echo "claudex — available make targets:"
 	@echo "  make build       Build debug binary"
 	@echo "  make release     Build optimized release binary"
+	@echo "  make bar         Build the claudex-bar desktop widget (release, --features bar)"
 	@echo "  make test        Run the test suite"
 	@echo "  make fmt         Format code with rustfmt"
 	@echo "  make fmt-check   Check formatting without modifying files"
@@ -28,6 +29,10 @@ build:
 
 release:
 	cargo build --release
+
+bar:
+	cargo build --release --features bar --bin claudex-bar
+	@echo "Built target/release/claudex-bar — run it next to the claudex binary (or set CLAUDEX_BIN)."
 
 test:
 	cargo test

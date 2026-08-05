@@ -2,7 +2,7 @@ use chrono::{DateTime, Local, NaiveDate, Timelike};
 use colored::Colorize;
 use terminal_size::{Width, terminal_size};
 
-use crate::codex::api::WindowSnapshot;
+use crate::codex::api::{Credits, UsageResponse, WindowSnapshot};
 use crate::commands::status::{self, Provider};
 
 const FILL_CHAR: char = '\u{2588}';
@@ -147,6 +147,134 @@ pub async fn run(show_timezone: bool) {
     }
 }
 
+pub async fn run_json(show_timezone: bool) {
+    let snapshot = crate::snapshot::ProviderSnapshot::from_result(
+        Provider::Codex,
+        snapshot(show_timezone).await,
+    );
+    crate::commands::usage_all::print_json(vec![snapshot]);
+}
+
+// --- Snapshot support (JSON output / claudex-bar). Keep in sync with the
+// print_* functions above; see src/snapshot.rs.
+
+fn window_bar_row(window: &WindowSnapshot, show_timezone: bool) -> crate::snapshot::Row {
+    let used = window.used_percent;
+    let detail = window.reset_at.and_then(|reset_at| {
+        let reset_str = format_reset_from_unix_with_options(reset_at, show_timezone);
+        if reset_str.is_empty() {
+            return None;
+        }
+        Some(match time_remaining_from_unix(reset_at) {
+            Some(rem) => format!("Resets {reset_str}, {rem} left"),
+            None => format!("Resets {reset_str}"),
+        })
+    });
+    let resets_at = window
+        .reset_at
+        .and_then(|ts| DateTime::from_timestamp(ts, 0))
+        .map(|dt| dt.to_rfc3339());
+    crate::snapshot::Row::bar(used, format!("{used:.0}% used"), detail, resets_at)
+}
+
+fn window_block(
+    title: &str,
+    window: &WindowSnapshot,
+    show_timezone: bool,
+) -> crate::snapshot::Block {
+    crate::snapshot::Block::titled(title, vec![window_bar_row(window, show_timezone)])
+}
+
+fn credits_block(credits: &Credits) -> Option<crate::snapshot::Block> {
+    if credits.unlimited.unwrap_or(false) {
+        return Some(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text("Credits: Unlimited"),
+        ]));
+    }
+    if credits.has_credits.unwrap_or(false) {
+        let balance = credits
+            .balance
+            .as_deref()
+            .and_then(|b| b.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        if balance > 0.0 {
+            return Some(crate::snapshot::Block::untitled(vec![
+                crate::snapshot::Row::text(format!("Credits: ${balance:.2}")),
+            ]));
+        }
+    }
+    None
+}
+
+fn build_blocks(usage: &UsageResponse, show_timezone: bool) -> Vec<crate::snapshot::Block> {
+    let has_limits = usage.rate_limit.is_some()
+        || usage
+            .additional_rate_limits
+            .as_ref()
+            .is_some_and(|a| !a.is_empty());
+
+    if !has_limits {
+        return vec![crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text("Codex usage data is not available for your plan."),
+        ])];
+    }
+
+    let mut blocks = Vec::new();
+
+    if let Some(plan) = &usage.plan_type {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text(format!("Subscription: {}", capitalize(plan))),
+        ]));
+    }
+
+    if let Some(rl) = &usage.rate_limit {
+        for window in [&rl.primary_window, &rl.secondary_window]
+            .into_iter()
+            .flatten()
+        {
+            blocks.push(window_block(
+                window_label(window.limit_window_seconds),
+                window,
+                show_timezone,
+            ));
+        }
+    }
+
+    if let Some(additional) = &usage.additional_rate_limits {
+        for extra in additional {
+            if let Some(rl) = &extra.rate_limit {
+                let name = extra.limit_name.as_deref().unwrap_or("Other");
+                for window in [&rl.primary_window, &rl.secondary_window]
+                    .into_iter()
+                    .flatten()
+                {
+                    let title = format!("{name} — {}", window_label(window.limit_window_seconds));
+                    blocks.push(window_block(&title, window, show_timezone));
+                }
+            }
+        }
+    }
+
+    if let Some(credits) = &usage.credits
+        && let Some(block) = credits_block(credits)
+    {
+        blocks.push(block);
+    }
+
+    blocks
+}
+
+pub async fn snapshot(show_timezone: bool) -> Result<crate::snapshot::ProviderSnapshot, String> {
+    let creds = crate::codex::auth::read_credentials()?;
+
+    let usage = crate::codex::api::fetch_usage(&creds).await?;
+
+    Ok(crate::snapshot::ProviderSnapshot::ok(
+        Provider::Codex,
+        build_blocks(&usage, show_timezone),
+    ))
+}
+
 pub async fn render(show_timezone: bool) -> Result<(), String> {
     let creds = crate::codex::auth::read_credentials()?;
 
@@ -289,5 +417,145 @@ mod tests {
     fn test_time_remaining_from_unix_past() {
         let past = Local::now().timestamp() - 100;
         assert!(time_remaining_from_unix(past).is_none());
+    }
+
+    fn usage_from_json(json: &str) -> UsageResponse {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn build_blocks_full_response_has_all_sections() {
+        let usage = usage_from_json(
+            r#"{
+                "plan_type": "pro",
+                "rate_limit": {
+                    "primary_window": {"used_percent": 9, "limit_window_seconds": 18000, "reset_at": 1779972641},
+                    "secondary_window": {"used_percent": 36, "limit_window_seconds": 604800, "reset_at": 1780210528}
+                },
+                "additional_rate_limits": [
+                    {
+                        "limit_name": "GPT-5.3-Codex-Spark",
+                        "rate_limit": {
+                            "primary_window": {"used_percent": 0, "limit_window_seconds": 18000, "reset_at": 1779975302},
+                            "secondary_window": {"used_percent": 0, "limit_window_seconds": 604800, "reset_at": 1780562102}
+                        }
+                    }
+                ],
+                "credits": {"has_credits": false, "unlimited": false, "balance": "0"}
+            }"#,
+        );
+        let blocks = build_blocks(&usage, false);
+
+        assert_eq!(blocks.len(), 5);
+        assert_eq!(blocks[0].title, None);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Subscription: Pro"),
+            _ => panic!("expected text row"),
+        }
+        assert_eq!(blocks[1].title.as_deref(), Some("Current session (5h)"));
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                detail,
+                resets_at,
+            } => {
+                assert_eq!(*percent, 9.0);
+                assert_eq!(text, "9% used");
+                assert!(detail.as_deref().unwrap().starts_with("Resets "));
+                assert_eq!(resets_at.as_deref(), Some("2026-05-28T12:50:41+00:00"));
+            }
+            _ => panic!("expected bar row"),
+        }
+        assert_eq!(blocks[2].title.as_deref(), Some("Current week"));
+        assert_eq!(
+            blocks[3].title.as_deref(),
+            Some("GPT-5.3-Codex-Spark — Current session (5h)")
+        );
+        assert_eq!(
+            blocks[4].title.as_deref(),
+            Some("GPT-5.3-Codex-Spark — Current week")
+        );
+    }
+
+    #[test]
+    fn build_blocks_without_limits_reports_plan_message() {
+        let usage = usage_from_json(r#"{"plan_type": "free"}"#);
+        let blocks = build_blocks(&usage, false);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].title, None);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert_eq!(text, "Codex usage data is not available for your plan.")
+            }
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_unnamed_limit_falls_back_to_other() {
+        let usage = usage_from_json(
+            r#"{
+                "additional_rate_limits": [
+                    {
+                        "limit_name": null,
+                        "rate_limit": {
+                            "primary_window": {"used_percent": 42.5, "limit_window_seconds": 18000}
+                        }
+                    }
+                ]
+            }"#,
+        );
+        let blocks = build_blocks(&usage, false);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0].title.as_deref(),
+            Some("Other — Current session (5h)")
+        );
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                detail,
+                resets_at,
+            } => {
+                assert_eq!(*percent, 42.5);
+                assert_eq!(text, "42% used");
+                assert!(detail.is_none());
+                assert!(resets_at.is_none());
+            }
+            _ => panic!("expected bar row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_credits_lines() {
+        let usage = usage_from_json(
+            r#"{
+                "rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": null}},
+                "credits": {"has_credits": true, "unlimited": true, "balance": "0"}
+            }"#,
+        );
+        let blocks = build_blocks(&usage, false);
+        assert_eq!(blocks.len(), 2);
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Credits: Unlimited"),
+            _ => panic!("expected text row"),
+        }
+
+        let usage = usage_from_json(
+            r#"{
+                "rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": null}},
+                "credits": {"has_credits": true, "unlimited": false, "balance": "12.5"}
+            }"#,
+        );
+        let blocks = build_blocks(&usage, false);
+        assert_eq!(blocks.len(), 2);
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Credits: $12.50"),
+            _ => panic!("expected text row"),
+        }
     }
 }

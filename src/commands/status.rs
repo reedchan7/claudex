@@ -32,6 +32,18 @@ impl Provider {
         }
     }
 
+    /// Accent color used for section headers in terminal and widget output.
+    pub fn accent(self) -> (u8, u8, u8) {
+        match self {
+            Provider::Claude => (217, 119, 87),
+            Provider::Codex => (16, 163, 127),
+            Provider::Antigravity => (66, 133, 244),
+            Provider::Glm => (99, 102, 241),
+            Provider::Kimi => (37, 190, 191),
+            Provider::Grok => (232, 168, 56),
+        }
+    }
+
     /// Canonical short name used by `--skip` and CLI subcommands.
     pub fn skip_name(self) -> &'static str {
         match self {

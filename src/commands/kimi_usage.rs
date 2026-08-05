@@ -77,6 +77,74 @@ pub async fn run(show_timezone: bool) {
     }
 }
 
+pub async fn run_json(show_timezone: bool) {
+    let snapshot = crate::snapshot::ProviderSnapshot::from_result(
+        Provider::Kimi,
+        snapshot(show_timezone).await,
+    );
+    crate::commands::usage_all::print_json(vec![snapshot]);
+}
+
+// --- Snapshot support (JSON output / claudex-bar). Keep in sync with
+// print_usage/print_row below; see src/snapshot.rs.
+
+fn bar_row(row: &UsageRow) -> crate::snapshot::Row {
+    let used_percent = used_percent(row);
+
+    let mut detail = if row.limit > 0 {
+        format!("Used {} / {}", row.used, row.limit)
+    } else {
+        format!("Used {}", row.used)
+    };
+    if let Some(reset_hint) = &row.reset_hint {
+        detail.push_str("; ");
+        detail.push_str(reset_hint);
+    }
+
+    crate::snapshot::Row::bar(
+        used_percent,
+        format!("{used_percent:.0}% used"),
+        Some(detail),
+        None,
+    )
+}
+
+fn usage_row_block(row: &UsageRow) -> crate::snapshot::Block {
+    crate::snapshot::Block::titled(row.label.clone(), vec![bar_row(row)])
+}
+
+fn build_blocks(usage: &ManagedUsage) -> Vec<crate::snapshot::Block> {
+    let mut blocks = Vec::new();
+
+    if let Some(subscription) = &usage.subscription {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text(format!("Subscription: {subscription}")),
+        ]));
+    }
+
+    let rows: Vec<&UsageRow> = usage.summary.iter().chain(usage.limits.iter()).collect();
+
+    if rows.is_empty() {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text("Kimi Code usage data is not available for your plan."),
+        ]));
+        return blocks;
+    }
+
+    blocks.extend(rows.into_iter().map(usage_row_block));
+    blocks
+}
+
+pub async fn snapshot(_show_timezone: bool) -> Result<crate::snapshot::ProviderSnapshot, String> {
+    let creds = crate::kimi::auth::read_credentials()?;
+    let usage = fetch_usage_with_recovery(creds).await?;
+
+    Ok(crate::snapshot::ProviderSnapshot::ok(
+        Provider::Kimi,
+        build_blocks(&usage),
+    ))
+}
+
 pub async fn render(_show_timezone: bool) -> Result<(), String> {
     let creds = crate::kimi::auth::read_credentials()?;
     let usage = fetch_usage_with_recovery(creds).await?;
@@ -148,5 +216,127 @@ mod tests {
         };
 
         assert_eq!(used_percent(&row), 0.0);
+    }
+
+    fn sample_usage() -> ManagedUsage {
+        ManagedUsage {
+            subscription: Some("Allegro".to_string()),
+            summary: Some(UsageRow {
+                label: "Weekly limit".to_string(),
+                used: 2,
+                limit: 100,
+                reset_hint: Some("resets in 7d".to_string()),
+            }),
+            limits: vec![UsageRow {
+                label: "5h limit".to_string(),
+                used: 1,
+                limit: 100,
+                reset_hint: Some("resets in 5h".to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn build_blocks_includes_subscription_and_limit_blocks() {
+        let blocks = build_blocks(&sample_usage());
+
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].title, None);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Subscription: Allegro"),
+            _ => panic!("expected text row"),
+        }
+
+        assert_eq!(blocks[1].title.as_deref(), Some("Weekly limit"));
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                detail,
+                resets_at,
+            } => {
+                assert_eq!(*percent, 2.0);
+                assert_eq!(text, "2% used");
+                assert_eq!(detail.as_deref(), Some("Used 2 / 100; resets in 7d"));
+                assert!(resets_at.is_none());
+            }
+            _ => panic!("expected bar row"),
+        }
+
+        assert_eq!(blocks[2].title.as_deref(), Some("5h limit"));
+        match &blocks[2].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent, detail, ..
+            } => {
+                assert_eq!(*percent, 1.0);
+                assert_eq!(detail.as_deref(), Some("Used 1 / 100; resets in 5h"));
+            }
+            _ => panic!("expected bar row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_reports_unavailable_plan_without_rows() {
+        let blocks = build_blocks(&ManagedUsage::default());
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].title, None);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert_eq!(text, "Kimi Code usage data is not available for your plan.")
+            }
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_keeps_subscription_before_unavailable_message() {
+        let usage = ManagedUsage {
+            subscription: Some("Andante".to_string()),
+            ..ManagedUsage::default()
+        };
+        let blocks = build_blocks(&usage);
+
+        assert_eq!(blocks.len(), 2);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Subscription: Andante"),
+            _ => panic!("expected text row"),
+        }
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert_eq!(text, "Kimi Code usage data is not available for your plan.")
+            }
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_without_limit_omits_denominator() {
+        let usage = ManagedUsage {
+            subscription: None,
+            summary: Some(UsageRow {
+                label: "Weekly limit".to_string(),
+                used: 5,
+                limit: 0,
+                reset_hint: None,
+            }),
+            limits: Vec::new(),
+        };
+        let blocks = build_blocks(&usage);
+
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                detail,
+                ..
+            } => {
+                assert_eq!(*percent, 0.0);
+                assert_eq!(text, "0% used");
+                assert_eq!(detail.as_deref(), Some("Used 5"));
+            }
+            _ => panic!("expected bar row"),
+        }
     }
 }

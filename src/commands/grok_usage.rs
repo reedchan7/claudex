@@ -456,6 +456,192 @@ pub async fn run(show_timezone: bool, show_monthly: bool) {
     }
 }
 
+pub async fn run_json(show_timezone: bool, show_monthly: bool) {
+    let snapshot = crate::snapshot::ProviderSnapshot::from_result(
+        Provider::Grok,
+        snapshot(show_timezone, show_monthly).await,
+    );
+    crate::commands::usage_all::print_json(vec![snapshot]);
+}
+
+// --- Snapshot support (JSON output / claudex-bar). Keep in sync with the
+// print_* functions above; see src/snapshot.rs.
+
+fn bar_row(
+    used_percent: f64,
+    resets_at: Option<&str>,
+    show_timezone: bool,
+) -> crate::snapshot::Row {
+    let detail = resets_at.map(|resets_at| {
+        let reset_str = format_reset_time(resets_at, show_timezone);
+        match time_remaining(resets_at) {
+            Some(rem) => format!("Resets {reset_str}, {rem} left"),
+            None => format!("Resets {reset_str}"),
+        }
+    });
+    crate::snapshot::Row::bar(
+        used_percent,
+        format!("{used_percent:.0}% used"),
+        detail,
+        resets_at.map(str::to_string),
+    )
+}
+
+/// Snapshot mirror of `print_usage_bar`: the bold title becomes the block
+/// title; the dimmed reset line becomes the bar row's `detail`.
+fn usage_bar_block(
+    title: &str,
+    used_percent: f64,
+    resets_at: Option<&str>,
+    show_timezone: bool,
+) -> crate::snapshot::Block {
+    crate::snapshot::Block::titled(title, vec![bar_row(used_percent, resets_at, show_timezone)])
+}
+
+/// Snapshot mirror of `print_money_line`: skipped for missing/zero amounts;
+/// the bold label becomes the block title, the dimmed value the text row.
+fn money_block(label: &str, amount: Option<f64>) -> Option<crate::snapshot::Block> {
+    let amount = amount?;
+    if amount == 0.0 {
+        return None;
+    }
+    Some(crate::snapshot::Block::titled(
+        label,
+        vec![crate::snapshot::Row::text(format!("${amount:.2}"))],
+    ))
+}
+
+fn build_blocks(
+    config: Option<&BillingConfig>,
+    raw_config: Option<&RawBillingConfig>,
+    subscription: Option<&str>,
+    show_timezone: bool,
+) -> Vec<crate::snapshot::Block> {
+    let mut blocks = Vec::new();
+    if let Some(tier) = subscription.map(str::trim).filter(|s| !s.is_empty()) {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text(format!("Subscription: {tier}")),
+        ]));
+    }
+
+    let Some(config) = config else {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text("Grok Build usage data is not available for your plan."),
+        ]));
+        return blocks;
+    };
+
+    // Mirrors print_billing's `printed` flag: the subscription line alone
+    // does not count as usage output.
+    let pre_usage_len = blocks.len();
+
+    // The credits view's `currentPeriod` is the real usage window; its `end`
+    // is the weekly reset (see print_billing).
+    let weekly_resets_at = config
+        .current_period
+        .as_ref()
+        .and_then(|p| p.end.as_deref())
+        .or(config.billing_period_end.as_deref());
+    let period = period_label(
+        config
+            .current_period
+            .as_ref()
+            .and_then(|p| p.period_type.as_deref()),
+    );
+
+    match credits_usage(config) {
+        Some(CreditsUsage::Products(products)) => {
+            for (name, percent) in &products {
+                let title = format!("{period} ({})", product_label(name));
+                blocks.push(usage_bar_block(
+                    &title,
+                    *percent,
+                    weekly_resets_at,
+                    show_timezone,
+                ));
+            }
+        }
+        Some(CreditsUsage::Aggregate(percent)) => {
+            blocks.push(usage_bar_block(
+                period,
+                percent,
+                weekly_resets_at,
+                show_timezone,
+            ));
+        }
+        None => {}
+    }
+
+    // Unofficial monthly estimate (see print_billing) — opt-in via
+    // `--monthly`; the disclaimer line is kept as a text row in the block.
+    if let Some(raw) = raw_config
+        && let (Some(limit), Some(used)) = (money_val(&raw.monthly_limit), money_val(&raw.used))
+        && limit > 0.0
+    {
+        let percent = (used / limit * 100.0).min(100.0);
+        let title = format!("Monthly estimate (USD) ({used:.0} / {limit:.0})");
+        blocks.push(crate::snapshot::Block::titled(
+            title,
+            vec![
+                bar_row(percent, raw.billing_period_end.as_deref(), show_timezone),
+                crate::snapshot::Row::text(
+                    "Unofficial — Grok exposes only weekly limits; unit unconfirmed.",
+                ),
+            ],
+        ));
+    }
+
+    for (label, amount) in [
+        (
+            "On-demand used",
+            money_val(&config.on_demand_used)
+                .or_else(|| raw_config.and_then(|r| money_val(&r.on_demand_used))),
+        ),
+        (
+            "On-demand cap",
+            money_val(&config.on_demand_cap)
+                .or_else(|| raw_config.and_then(|r| money_val(&r.on_demand_cap))),
+        ),
+        ("Prepaid balance", money_val(&config.prepaid_balance)),
+    ] {
+        if let Some(block) = money_block(label, amount) {
+            blocks.push(block);
+        }
+    }
+
+    if blocks.len() == pre_usage_len {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text("Grok Build usage data is not available for your plan."),
+        ]));
+    }
+
+    blocks
+}
+
+pub async fn snapshot(
+    show_timezone: bool,
+    show_monthly: bool,
+) -> Result<crate::snapshot::ProviderSnapshot, String> {
+    let mut creds = crate::grok::auth::read_credentials()?;
+    if creds.is_expired() {
+        creds = crate::grok::auth::refresh_credentials(&creds).await?;
+    }
+
+    let (billing, raw_billing, user, settings) =
+        fetch_usage_with_recovery(creds, show_monthly).await?;
+    let subscription = resolve_display_tier(&settings, &user, &billing);
+
+    Ok(crate::snapshot::ProviderSnapshot::ok(
+        Provider::Grok,
+        build_blocks(
+            billing.config.as_ref(),
+            raw_billing.config.as_ref(),
+            subscription.as_deref(),
+            show_timezone,
+        ),
+    ))
+}
+
 pub async fn render(show_timezone: bool, show_monthly: bool) -> Result<(), String> {
     let mut creds = crate::grok::auth::read_credentials()?;
     if creds.is_expired() {
@@ -707,5 +893,193 @@ mod tests {
         let json = r#"{"creditUsagePercent": 11.0}"#;
         let config: BillingConfig = serde_json::from_str(json).unwrap();
         assert_eq!(credits_usage(&config), None);
+    }
+
+    fn billing_config_from_json(json: &str) -> BillingConfig {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn raw_billing_config_from_json(json: &str) -> RawBillingConfig {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn build_blocks_product_usage_bar_with_subscription() {
+        let config = billing_config_from_json(
+            r#"{
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2026-07-04T06:31:57.450351+00:00",
+                    "end": "2099-07-11T06:31:57.450351+00:00"
+                },
+                "productUsage": [{"product": "GrokBuild", "usagePercent": 11.0}]
+            }"#,
+        );
+        let blocks = build_blocks(Some(&config), None, Some("SuperGrok Heavy"), false);
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].title, None);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert_eq!(text, "Subscription: SuperGrok Heavy")
+            }
+            _ => panic!("expected text row"),
+        }
+        assert_eq!(
+            blocks[1].title.as_deref(),
+            Some("Current week (Grok Build)")
+        );
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                detail,
+                resets_at,
+            } => {
+                assert_eq!(*percent, 11.0);
+                assert_eq!(text, "11% used");
+                let detail = detail.as_deref().unwrap();
+                assert!(detail.starts_with("Resets "));
+                assert!(detail.contains(" left"));
+                assert_eq!(
+                    resets_at.as_deref(),
+                    Some("2099-07-11T06:31:57.450351+00:00")
+                );
+            }
+            _ => panic!("expected bar row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_zero_usage_period_is_zero_percent_bar() {
+        // Period present but percent fields omitted → 0% bar (credits_usage).
+        let config =
+            billing_config_from_json(r#"{"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY"}}"#);
+        let blocks = build_blocks(Some(&config), None, None, false);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].title.as_deref(), Some("Current week"));
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                detail,
+                resets_at,
+            } => {
+                assert_eq!(*percent, 0.0);
+                assert_eq!(text, "0% used");
+                assert!(detail.is_none());
+                assert!(resets_at.is_none());
+            }
+            _ => panic!("expected bar row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_monthly_estimate_and_money_lines() {
+        // onDemandUsed comes only from the raw view — exercises the
+        // config-or-raw fallback from print_billing.
+        let config = billing_config_from_json(
+            r#"{
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "end": "2099-07-11T06:31:57.450351+00:00"
+                },
+                "creditUsagePercent": 11.0,
+                "onDemandCap": { "val": 0 },
+                "prepaidBalance": { "val": 12.5 }
+            }"#,
+        );
+        let raw = raw_billing_config_from_json(
+            r#"{
+                "monthlyLimit": { "val": 50 },
+                "used": { "val": 10 },
+                "onDemandUsed": { "val": 5 },
+                "billingPeriodEnd": "2099-08-01T00:00:00+00:00"
+            }"#,
+        );
+        let blocks = build_blocks(Some(&config), Some(&raw), None, false);
+
+        // Weekly bar, monthly estimate, on-demand used, prepaid balance.
+        // The zero on-demand cap is skipped (print_money_line parity).
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0].title.as_deref(), Some("Current week"));
+
+        assert_eq!(
+            blocks[1].title.as_deref(),
+            Some("Monthly estimate (USD) (10 / 50)")
+        );
+        assert_eq!(blocks[1].rows.len(), 2);
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Bar {
+                percent,
+                text,
+                resets_at,
+                ..
+            } => {
+                assert_eq!(*percent, 20.0);
+                assert_eq!(text, "20% used");
+                assert_eq!(resets_at.as_deref(), Some("2099-08-01T00:00:00+00:00"));
+            }
+            _ => panic!("expected bar row"),
+        }
+        match &blocks[1].rows[1] {
+            crate::snapshot::Row::Text { text } => assert_eq!(
+                text,
+                "Unofficial — Grok exposes only weekly limits; unit unconfirmed."
+            ),
+            _ => panic!("expected text row"),
+        }
+
+        assert_eq!(blocks[2].title.as_deref(), Some("On-demand used"));
+        match &blocks[2].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "$5.00"),
+            _ => panic!("expected text row"),
+        }
+        assert_eq!(blocks[3].title.as_deref(), Some("Prepaid balance"));
+        match &blocks[3].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "$12.50"),
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_no_config_reports_unavailable() {
+        let blocks = build_blocks(None, None, Some("SuperGrok"), false);
+
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks.iter().all(|b| b.title.is_none()));
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, "Subscription: SuperGrok"),
+            _ => panic!("expected text row"),
+        }
+        match &blocks[1].rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert_eq!(
+                    text,
+                    "Grok Build usage data is not available for your plan."
+                )
+            }
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_config_without_period_or_money_reports_unavailable() {
+        // credits_usage returns None without a current period, and there are
+        // no money lines — same fallback as print_billing's `!printed`.
+        let config = billing_config_from_json(r#"{"creditUsagePercent": 11.0}"#);
+        let blocks = build_blocks(Some(&config), None, None, false);
+
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0].rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert_eq!(
+                    text,
+                    "Grok Build usage data is not available for your plan."
+                )
+            }
+            _ => panic!("expected text row"),
+        }
     }
 }

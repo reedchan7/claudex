@@ -15,6 +15,16 @@ readme = "README.md"
 name = "claudex"
 path = "src/main.rs"
 
+[[bin]]
+name = "claudex-bar"
+path = "src/bin/claudex-bar.rs"
+required-features = ["bar"]
+
+[features]
+# `bar` builds the claudex-bar desktop widget (egui floating window + tray
+# icon). CLI-only builds stay free of GUI dependencies.
+bar = ["dep:eframe", "dep:tray-icon", "dep:objc2", "dep:objc2-app-kit"]
+
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
 reqwest = { version = "0.13", features = ["json"] }
@@ -28,3 +38,12 @@ iana-time-zone = "0.1"
 terminal_size = "0.4"
 self-replace = "1"
 sha2 = "0.11"
+eframe = { version = "0.35", optional = true, default-features = false, features = [
+    "glow",
+    "default_fonts",
+] }
+tray-icon = { version = "0.24", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", optional = true }

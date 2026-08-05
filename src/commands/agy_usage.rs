@@ -309,6 +309,14 @@ pub async fn run(show_timezone: bool) {
     }
 }
 
+pub async fn run_json(show_timezone: bool) {
+    let snapshot = crate::snapshot::ProviderSnapshot::from_result(
+        Provider::Antigravity,
+        snapshot(show_timezone).await,
+    );
+    crate::commands::usage_all::print_json(vec![snapshot]);
+}
+
 fn is_auth_error(error: &str) -> bool {
     error.to_ascii_lowercase().contains("authentication failed")
 }
@@ -325,6 +333,167 @@ async fn fetch_quota_with_recovery(
         }
         Err(e) => Err(e),
     }
+}
+
+// --- Snapshot support (JSON output / claudex-bar). Keep in sync with the
+// print_* functions above; see src/snapshot.rs.
+
+/// Reset line printed by `print_bucket` below every quota bucket.
+fn bucket_reset_line(reset_time: &str, show_timezone: bool) -> String {
+    let reset_str = format_reset_time_with_options(reset_time, show_timezone);
+    match time_remaining(reset_time) {
+        Some(rem) => format!("Refreshes {reset_str}, {rem} left"),
+        None => format!("Refreshes {reset_str}"),
+    }
+}
+
+/// Content rows of `print_bucket` without its leading bold label line.
+fn bucket_content_rows(
+    bucket: &QuotaSummaryBucket,
+    show_timezone: bool,
+) -> Vec<crate::snapshot::Row> {
+    let reset_detail = || {
+        bucket
+            .reset_time
+            .as_deref()
+            .map(|reset_time| bucket_reset_line(reset_time, show_timezone))
+    };
+
+    if bucket.disabled.unwrap_or(false) {
+        let mut rows = vec![crate::snapshot::Row::text("Disabled")];
+        if let Some(detail) = reset_detail() {
+            rows.push(crate::snapshot::Row::text(detail));
+        }
+        return rows;
+    }
+
+    if let Some(remaining_fraction) = bucket.remaining_fraction {
+        let used_percent = used_percent_from_remaining_fraction(remaining_fraction);
+        return vec![crate::snapshot::Row::bar(
+            used_percent,
+            format_used_percent(used_percent),
+            reset_detail(),
+            bucket.reset_time.clone(),
+        )];
+    }
+
+    let mut rows = vec![match bucket.remaining_amount {
+        Some(remaining_amount) => {
+            crate::snapshot::Row::text(format_remaining_amount(remaining_amount))
+        }
+        None => crate::snapshot::Row::text("Quota amount was not returned."),
+    }];
+    if let Some(detail) = reset_detail() {
+        rows.push(crate::snapshot::Row::text(detail));
+    }
+    rows
+}
+
+/// One quota bucket as printed by `print_bucket`: bold label, then content rows.
+fn bucket_rows(bucket: &QuotaSummaryBucket, show_timezone: bool) -> Vec<crate::snapshot::Row> {
+    let mut rows = vec![crate::snapshot::Row::text(bucket_label(bucket))];
+    rows.extend(bucket_content_rows(bucket, show_timezone));
+    rows
+}
+
+fn group_block(
+    group: &crate::agy::api::QuotaSummaryGroup,
+    show_timezone: bool,
+) -> crate::snapshot::Block {
+    let mut rows = Vec::new();
+    if let Some(description) = group
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        rows.push(crate::snapshot::Row::text(description));
+    }
+    for bucket in &group.buckets {
+        rows.extend(bucket_rows(bucket, show_timezone));
+    }
+    crate::snapshot::Block::titled(group.display_name.clone(), rows)
+}
+
+/// "Model Usage" summary section, aggregated per tier like `print_model_usage`.
+fn model_usage_block(
+    quota: &UserQuotaSummaryResponse,
+    show_timezone: bool,
+) -> Option<crate::snapshot::Block> {
+    let model_buckets = crate::agy::model_tier::build_model_buckets(quota);
+    if model_buckets.is_empty() {
+        return None;
+    }
+    let tiers = crate::agy::model_tier::aggregate_by_tier(&model_buckets);
+    if tiers.is_empty() {
+        return None;
+    }
+
+    let mut rows = Vec::new();
+    for tu in &tiers {
+        let used_percent = used_percent_from_remaining_fraction(tu.remaining_fraction);
+        rows.push(crate::snapshot::Row::text(tu.tier.display_name()));
+        rows.push(crate::snapshot::Row::bar(
+            used_percent,
+            format_used_percent(used_percent),
+            tu.reset_time
+                .as_deref()
+                .map(|reset_time| format_model_reset(reset_time, show_timezone)),
+            tu.reset_time.clone(),
+        ));
+    }
+
+    Some(crate::snapshot::Block::titled("Model Usage", rows))
+}
+
+fn build_blocks(
+    quota: &UserQuotaSummaryResponse,
+    show_timezone: bool,
+) -> Vec<crate::snapshot::Block> {
+    if !has_quota_data(quota) {
+        return vec![crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text("Antigravity quota data is not available for your account."),
+        ])];
+    }
+
+    let mut blocks = Vec::new();
+    if let Some(subscription) = quota.subscription.as_deref() {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text(format!("Subscription: {subscription}")),
+        ]));
+    }
+
+    for group in &quota.groups {
+        blocks.push(group_block(group, show_timezone));
+    }
+
+    for bucket in quota
+        .buckets
+        .iter()
+        .filter(|bucket| should_print_standalone_bucket(bucket))
+    {
+        blocks.push(crate::snapshot::Block::titled(
+            bucket_label(bucket),
+            bucket_content_rows(bucket, show_timezone),
+        ));
+    }
+
+    if let Some(block) = model_usage_block(quota, show_timezone) {
+        blocks.push(block);
+    }
+
+    blocks
+}
+
+pub async fn snapshot(show_timezone: bool) -> Result<crate::snapshot::ProviderSnapshot, String> {
+    let session = crate::agy::auth::read_session().await?;
+    let user_agent = crate::agy::auth::agy_user_agent();
+    let quota = fetch_quota_with_recovery(session, &user_agent).await?;
+
+    Ok(crate::snapshot::ProviderSnapshot::ok(
+        Provider::Antigravity,
+        build_blocks(&quota, show_timezone),
+    ))
 }
 
 pub async fn render(show_timezone: bool) -> Result<(), String> {
@@ -451,5 +620,216 @@ mod tests {
         assert!(!is_auth_error(
             "failed to fetch Antigravity quota data: HTTP 500"
         ));
+    }
+
+    fn quota_from_json(json: &str) -> UserQuotaSummaryResponse {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn assert_text(row: &crate::snapshot::Row, expected: &str) {
+        match row {
+            crate::snapshot::Row::Text { text } => assert_eq!(text, expected),
+            _ => panic!("expected text row, got {row:?}"),
+        }
+    }
+
+    fn assert_bar(row: &crate::snapshot::Row, percent: f64, text: &str, resets_at: Option<&str>) {
+        match row {
+            crate::snapshot::Row::Bar {
+                percent: actual,
+                text: actual_text,
+                resets_at: actual_resets_at,
+                ..
+            } => {
+                assert!(
+                    (actual - percent).abs() < 1e-9,
+                    "percent {actual} != {percent}"
+                );
+                assert_eq!(actual_text, text);
+                assert_eq!(actual_resets_at.as_deref(), resets_at);
+            }
+            _ => panic!("expected bar row, got {row:?}"),
+        }
+    }
+
+    fn bar_detail(row: &crate::snapshot::Row) -> Option<&str> {
+        match row {
+            crate::snapshot::Row::Bar { detail, .. } => detail.as_deref(),
+            _ => panic!("expected bar row, got {row:?}"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_mirrors_groups_standalone_and_model_usage() {
+        let mut quota = quota_from_json(
+            r#"{
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "description": "Models within this group: Gemini Flash, Gemini Pro",
+                        "buckets": [
+                            {"displayName": "Weekly Limit", "remainingFraction": 0.9207936, "resetTime": "2099-06-19T08:46:00Z"},
+                            {"displayName": "Five Hour Limit", "remainingFraction": 1, "resetTime": "2099-06-16T08:39:13Z"}
+                        ]
+                    },
+                    {
+                        "displayName": "Claude and GPT models",
+                        "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+                        "buckets": [
+                            {"displayName": "Weekly Limit", "remainingFraction": 0.66, "resetTime": "2099-06-23T01:30:12Z"},
+                            {"displayName": "Five Hour Limit", "remainingFraction": 0.0, "disabled": true}
+                        ]
+                    }
+                ],
+                "buckets": [
+                    {"modelId": "gemini-3.1-pro-preview", "remainingFraction": 0.5856, "resetTime": "2099-06-16T17:20:00Z"},
+                    {"modelId": "gemini-3-flash-preview", "remainingFraction": 0.99, "resetTime": "2099-06-16T17:57:00Z"},
+                    {"displayName": "Weekly Limit", "remainingFraction": 0.5, "resetTime": "2099-06-20T00:00:00Z"}
+                ]
+            }"#,
+        );
+        quota.subscription = Some("Antigravity".to_string());
+
+        let blocks = build_blocks(&quota, false);
+
+        assert_eq!(blocks.len(), 5);
+
+        // Subscription line mirrors render's "Subscription: X".
+        assert_eq!(blocks[0].title, None);
+        assert_text(&blocks[0].rows[0], "Subscription: Antigravity");
+
+        // Group block: title is the group name, description is the first row,
+        // then each bucket as label row + content rows.
+        assert_eq!(blocks[1].title.as_deref(), Some("Gemini Models"));
+        let gemini = &blocks[1].rows;
+        assert_eq!(gemini.len(), 5);
+        assert_text(
+            &gemini[0],
+            "Models within this group: Gemini Flash, Gemini Pro",
+        );
+        assert_text(&gemini[1], "Weekly Limit");
+        assert_bar(
+            &gemini[2],
+            7.92064,
+            "7.92% used",
+            Some("2099-06-19T08:46:00Z"),
+        );
+        assert!(bar_detail(&gemini[2]).unwrap().starts_with("Refreshes "));
+        assert_text(&gemini[3], "Five Hour Limit");
+        assert_bar(&gemini[4], 0.0, "0.00% used", Some("2099-06-16T08:39:13Z"));
+
+        // Disabled buckets stay text rows, like print_bucket's "Disabled" line.
+        assert_eq!(blocks[2].title.as_deref(), Some("Claude and GPT models"));
+        let third_party = &blocks[2].rows;
+        assert_eq!(third_party.len(), 5);
+        assert_text(
+            &third_party[0],
+            "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+        );
+        assert_text(&third_party[1], "Weekly Limit");
+        assert_bar(
+            &third_party[2],
+            34.0,
+            "34.00% used",
+            Some("2099-06-23T01:30:12Z"),
+        );
+        assert_text(&third_party[3], "Five Hour Limit");
+        assert_text(&third_party[4], "Disabled");
+
+        // A standalone bucket becomes its own block titled with its label.
+        assert_eq!(blocks[3].title.as_deref(), Some("Weekly Limit"));
+        assert_eq!(blocks[3].rows.len(), 1);
+        assert_bar(
+            &blocks[3].rows[0],
+            50.0,
+            "50.00% used",
+            Some("2099-06-20T00:00:00Z"),
+        );
+
+        // Model Usage summary: tier name row followed by its bar, detail uses
+        // the "Resets: ..." copy of print_model_usage (not "Refreshes ...").
+        assert_eq!(blocks[4].title.as_deref(), Some("Model Usage"));
+        let usage = &blocks[4].rows;
+        assert_eq!(usage.len(), 4);
+        assert_text(&usage[0], "Pro");
+        assert_bar(
+            &usage[1],
+            41.44,
+            "41.44% used",
+            Some("2099-06-16T17:20:00Z"),
+        );
+        assert!(bar_detail(&usage[1]).unwrap().starts_with("Resets: "));
+        assert_text(&usage[2], "Flash");
+        assert_bar(&usage[3], 1.0, "1.00% used", Some("2099-06-16T17:57:00Z"));
+    }
+
+    #[test]
+    fn build_blocks_reports_missing_quota_data() {
+        let mut quota = quota_from_json(r#"{}"#);
+        // render returns before printing the subscription when there is no data.
+        quota.subscription = Some("Antigravity".to_string());
+
+        let blocks = build_blocks(&quota, false);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].title, None);
+        assert_text(
+            &blocks[0].rows[0],
+            "Antigravity quota data is not available for your account.",
+        );
+    }
+
+    #[test]
+    fn build_blocks_omits_model_usage_without_model_buckets() {
+        let quota = quota_from_json(
+            r#"{
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "description": "Models within this group: Gemini Flash, Gemini Pro",
+                        "buckets": [
+                            {"displayName": "Weekly Limit", "remainingFraction": 0.9207936, "resetTime": "2099-06-19T08:46:00Z"}
+                        ]
+                    }
+                ]
+            }"#,
+        );
+
+        let blocks = build_blocks(&quota, false);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].title.as_deref(), Some("Gemini Models"));
+    }
+
+    #[test]
+    fn build_blocks_disabled_and_amount_buckets_stay_text_rows() {
+        let quota = quota_from_json(
+            r#"{
+                "groups": [
+                    {
+                        "displayName": "Claude and GPT models",
+                        "buckets": [
+                            {"displayName": "Five Hour Limit", "disabled": true, "resetTime": "2099-06-16T08:39:13Z"},
+                            {"displayName": "Burst Quota", "remainingAmount": 42}
+                        ]
+                    }
+                ]
+            }"#,
+        );
+
+        let blocks = build_blocks(&quota, false);
+
+        // No description row: the first row is the bucket label.
+        assert_eq!(blocks.len(), 1);
+        let rows = &blocks[0].rows;
+        assert_eq!(rows.len(), 5);
+        assert_text(&rows[0], "Five Hour Limit");
+        assert_text(&rows[1], "Disabled");
+        match &rows[2] {
+            crate::snapshot::Row::Text { text } => assert!(text.starts_with("Refreshes ")),
+            _ => panic!("expected text row"),
+        }
+        assert_text(&rows[3], "Burst Quota");
+        assert_text(&rows[4], "42 available");
     }
 }

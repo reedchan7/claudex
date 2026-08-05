@@ -1,11 +1,4 @@
-mod agy;
-mod api;
-mod auth;
-mod codex;
-mod commands;
-mod glm;
-mod grok;
-mod kimi;
+use claudex::commands;
 
 use clap::{Parser, Subcommand};
 
@@ -26,6 +19,9 @@ enum Commands {
         /// Show the timezone name next to reset times
         #[arg(long)]
         show_timezone: bool,
+        /// Output machine-readable JSON instead of terminal bars
+        #[arg(long)]
+        json: bool,
         /// Skip one or more providers when used with `--all` (repeatable or comma-separated)
         #[arg(long = "skip", value_name = "AGENT", action = clap::ArgAction::Append, value_delimiter = ',')]
         skip: Vec<String>,
@@ -88,6 +84,9 @@ enum CodexCommands {
         /// Show the timezone name next to reset times
         #[arg(long)]
         show_timezone: bool,
+        /// Output machine-readable JSON instead of terminal bars
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -98,6 +97,9 @@ enum AgyCommands {
         /// Show the timezone name next to reset times
         #[arg(long)]
         show_timezone: bool,
+        /// Output machine-readable JSON instead of terminal bars
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -108,6 +110,9 @@ enum GlmCommands {
         /// Show the timezone name next to reset times
         #[arg(long)]
         show_timezone: bool,
+        /// Output machine-readable JSON instead of terminal bars
+        #[arg(long)]
+        json: bool,
         /// Use the domestic BigModel edition (open.bigmodel.cn)
         #[arg(long, conflicts_with = "global")]
         cn: bool,
@@ -124,6 +129,9 @@ enum KimiCommands {
         /// Accepted for consistency with other usage commands
         #[arg(long)]
         show_timezone: bool,
+        /// Output machine-readable JSON instead of terminal bars
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -134,6 +142,9 @@ enum GrokCommands {
         /// Show the timezone name next to reset times
         #[arg(long)]
         show_timezone: bool,
+        /// Output machine-readable JSON instead of terminal bars
+        #[arg(long)]
+        json: bool,
         /// Show the unofficial monthly billing estimate (USD) from the
         /// /billing proxy. Grok exposes only weekly limits officially; the
         /// monthly figure is unverified and shown labelled as an estimate.
@@ -149,41 +160,89 @@ async fn main() {
         Commands::Usage {
             all,
             show_timezone,
+            json,
             skip,
         } => {
             if all {
-                commands::usage_all::run(show_timezone, &skip).await
+                if json {
+                    commands::usage_all::run_json(show_timezone, &skip).await
+                } else {
+                    commands::usage_all::run(show_timezone, &skip).await
+                }
             } else {
                 if !skip.is_empty() {
                     eprintln!("--skip is only used with `usage --all`");
                     std::process::exit(2);
                 }
-                commands::usage::run(show_timezone).await
+                if json {
+                    commands::usage::run_json(show_timezone).await
+                } else {
+                    commands::usage::run(show_timezone).await
+                }
             }
         }
         Commands::Codex { command } => match command {
-            CodexCommands::Usage { show_timezone } => {
-                commands::codex_usage::run(show_timezone).await
+            CodexCommands::Usage {
+                show_timezone,
+                json,
+            } => {
+                if json {
+                    commands::codex_usage::run_json(show_timezone).await
+                } else {
+                    commands::codex_usage::run(show_timezone).await
+                }
             }
         },
         Commands::Agy { command } => match command {
-            AgyCommands::Usage { show_timezone } => commands::agy_usage::run(show_timezone).await,
+            AgyCommands::Usage {
+                show_timezone,
+                json,
+            } => {
+                if json {
+                    commands::agy_usage::run_json(show_timezone).await
+                } else {
+                    commands::agy_usage::run(show_timezone).await
+                }
+            }
         },
         Commands::Glm { command } => match command {
             GlmCommands::Usage {
                 show_timezone,
+                json,
                 cn,
                 global,
-            } => commands::glm_usage::run(show_timezone, region_override(cn, global)).await,
+            } => {
+                if json {
+                    commands::glm_usage::run_json(show_timezone, region_override(cn, global)).await
+                } else {
+                    commands::glm_usage::run(show_timezone, region_override(cn, global)).await
+                }
+            }
         },
         Commands::Kimi { command } => match command {
-            KimiCommands::Usage { show_timezone } => commands::kimi_usage::run(show_timezone).await,
+            KimiCommands::Usage {
+                show_timezone,
+                json,
+            } => {
+                if json {
+                    commands::kimi_usage::run_json(show_timezone).await
+                } else {
+                    commands::kimi_usage::run(show_timezone).await
+                }
+            }
         },
         Commands::Grok { command } => match command {
             GrokCommands::Usage {
                 show_timezone,
+                json,
                 monthly,
-            } => commands::grok_usage::run(show_timezone, monthly).await,
+            } => {
+                if json {
+                    commands::grok_usage::run_json(show_timezone, monthly).await
+                } else {
+                    commands::grok_usage::run(show_timezone, monthly).await
+                }
+            }
         },
         Commands::Update {
             no_post_check,
@@ -217,6 +276,7 @@ mod tests {
                 all,
                 show_timezone,
                 skip,
+                ..
             } => {
                 assert!(!all);
                 assert!(show_timezone);
@@ -235,6 +295,7 @@ mod tests {
                 all,
                 show_timezone,
                 skip,
+                ..
             } => {
                 assert!(all);
                 assert!(show_timezone);
@@ -279,7 +340,7 @@ mod tests {
 
         match cli.command {
             Commands::Codex {
-                command: CodexCommands::Usage { show_timezone },
+                command: CodexCommands::Usage { show_timezone, .. },
             } => assert!(show_timezone),
             _ => panic!("expected gpt usage command"),
         }
@@ -291,7 +352,7 @@ mod tests {
 
         match cli.command {
             Commands::Codex {
-                command: CodexCommands::Usage { show_timezone },
+                command: CodexCommands::Usage { show_timezone, .. },
             } => assert!(!show_timezone),
             _ => panic!("expected gpt usage via codex alias"),
         }
@@ -303,7 +364,7 @@ mod tests {
 
         match cli.command {
             Commands::Agy {
-                command: AgyCommands::Usage { show_timezone },
+                command: AgyCommands::Usage { show_timezone, .. },
             } => assert!(show_timezone),
             _ => panic!("expected agy usage command"),
         }
@@ -315,7 +376,7 @@ mod tests {
 
         match cli.command {
             Commands::Agy {
-                command: AgyCommands::Usage { show_timezone },
+                command: AgyCommands::Usage { show_timezone, .. },
             } => assert!(!show_timezone),
             _ => panic!("expected agy usage via gemini alias"),
         }
@@ -332,6 +393,7 @@ mod tests {
                         show_timezone,
                         cn,
                         global,
+                        ..
                     },
             } => {
                 assert!(show_timezone);
@@ -363,7 +425,7 @@ mod tests {
 
         match cli.command {
             Commands::Kimi {
-                command: KimiCommands::Usage { show_timezone },
+                command: KimiCommands::Usage { show_timezone, .. },
             } => assert!(show_timezone),
             _ => panic!("expected kimi usage command"),
         }
@@ -413,6 +475,7 @@ mod tests {
                     GrokCommands::Usage {
                         show_timezone,
                         monthly,
+                        ..
                     },
             } => {
                 assert!(show_timezone);
@@ -432,6 +495,7 @@ mod tests {
                     GrokCommands::Usage {
                         show_timezone,
                         monthly,
+                        ..
                     },
             } => {
                 assert!(!show_timezone);
@@ -451,6 +515,7 @@ mod tests {
                     GrokCommands::Usage {
                         show_timezone,
                         monthly,
+                        ..
                     },
             } => {
                 assert!(!show_timezone);
@@ -465,5 +530,43 @@ mod tests {
         assert_eq!(region_override(true, false), Some("cn"));
         assert_eq!(region_override(false, true), Some("global"));
         assert_eq!(region_override(false, false), None);
+    }
+
+    #[test]
+    fn usage_parses_json_flag() {
+        let cli = Cli::try_parse_from(["claudex", "usage", "--json"]).unwrap();
+
+        match cli.command {
+            Commands::Usage { all, json, .. } => {
+                assert!(!all);
+                assert!(json);
+            }
+            _ => panic!("expected usage command"),
+        }
+    }
+
+    #[test]
+    fn usage_all_parses_json_flag() {
+        let cli = Cli::try_parse_from(["claudex", "usage", "--all", "--json"]).unwrap();
+
+        match cli.command {
+            Commands::Usage { all, json, .. } => {
+                assert!(all);
+                assert!(json);
+            }
+            _ => panic!("expected usage command"),
+        }
+    }
+
+    #[test]
+    fn provider_usage_parses_json_flag() {
+        let cli = Cli::try_parse_from(["claudex", "gpt", "usage", "--json"]).unwrap();
+
+        match cli.command {
+            Commands::Codex {
+                command: CodexCommands::Usage { json, .. },
+            } => assert!(json),
+            _ => panic!("expected gpt usage command"),
+        }
     }
 }

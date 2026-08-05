@@ -38,17 +38,6 @@ fn print_header(title: &str, accent: (u8, u8, u8)) {
     println!();
 }
 
-fn provider_accent(provider: Provider) -> (u8, u8, u8) {
-    match provider {
-        Provider::Claude => (217, 119, 87),
-        Provider::Codex => (16, 163, 127),
-        Provider::Antigravity => (66, 133, 244),
-        Provider::Glm => (99, 102, 241),
-        Provider::Kimi => (37, 190, 191),
-        Provider::Grok => (232, 168, 56),
-    }
-}
-
 fn provider_gap(index: usize) -> &'static str {
     if index == 0 { "" } else { "\n\n" }
 }
@@ -112,7 +101,7 @@ pub async fn run(show_timezone: bool, skip: &[String]) {
 
     for (index, provider) in providers.into_iter().enumerate() {
         print!("{}", provider_gap(index));
-        print_header(provider.label(), provider_accent(provider));
+        print_header(provider.label(), provider.accent());
         match render_provider(provider, show_timezone).await {
             Ok(()) => rendered += 1,
             Err(e) => {
@@ -129,6 +118,62 @@ pub async fn run(show_timezone: bool, skip: &[String]) {
 
 fn should_exit_failure(rendered: usize, had_error: bool) -> bool {
     had_error && rendered == 0
+}
+
+async fn fetch_provider_snapshot(
+    provider: Provider,
+    show_timezone: bool,
+) -> crate::snapshot::ProviderSnapshot {
+    let result = match provider {
+        Provider::Claude => crate::commands::usage::snapshot(show_timezone).await,
+        Provider::Codex => crate::commands::codex_usage::snapshot(show_timezone).await,
+        Provider::Antigravity => crate::commands::agy_usage::snapshot(show_timezone).await,
+        Provider::Glm => crate::commands::glm_usage::snapshot(show_timezone, None).await,
+        Provider::Kimi => crate::commands::kimi_usage::snapshot(show_timezone).await,
+        Provider::Grok => crate::commands::grok_usage::snapshot(show_timezone, false).await,
+    };
+    crate::snapshot::ProviderSnapshot::from_result(provider, result)
+}
+
+/// Print the snapshot document as pretty JSON on stdout. Exits non-zero when
+/// serialization fails or every provider is unavailable, mirroring the
+/// terminal exit-code rules.
+pub fn print_json(providers: Vec<crate::snapshot::ProviderSnapshot>) {
+    let any_available = providers
+        .iter()
+        .any(crate::snapshot::ProviderSnapshot::is_available);
+    let document = crate::snapshot::Snapshot::new(providers);
+    match serde_json::to_string_pretty(&document) {
+        Ok(json) => println!("{json}"),
+        Err(e) => {
+            eprintln!("{} failed to serialize usage snapshot: {e}", "✗".red());
+            std::process::exit(1);
+        }
+    }
+    if !any_available {
+        std::process::exit(1);
+    }
+}
+
+pub async fn run_json(show_timezone: bool, skip: &[String]) {
+    let providers = match resolve_providers(skip) {
+        Ok(providers) => providers,
+        Err(e) => {
+            eprintln!("{} {e}", "✗".red());
+            std::process::exit(1);
+        }
+    };
+
+    if providers.is_empty() {
+        eprintln!("{} all providers were skipped", "✗".red());
+        std::process::exit(1);
+    }
+
+    let mut snapshots = Vec::with_capacity(providers.len());
+    for provider in providers {
+        snapshots.push(fetch_provider_snapshot(provider, show_timezone).await);
+    }
+    print_json(snapshots);
 }
 
 #[cfg(test)]
