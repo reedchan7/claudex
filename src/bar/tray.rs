@@ -1,10 +1,12 @@
-//! Menu-bar (tray) icon for claudex-bar: refresh, click-through toggle, quit.
+//! Menu-bar (tray) icon for claudex-bar: refresh, show/hide, click-through,
+//! quit.
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
 pub enum TrayCommand {
     Refresh,
+    ToggleVisible,
     ToggleClickThrough,
     Quit,
 }
@@ -12,6 +14,7 @@ pub enum TrayCommand {
 pub struct Tray {
     _icon: TrayIcon,
     refresh_id: MenuId,
+    show_hide_id: MenuId,
     click_through_item: CheckMenuItem,
     click_through_id: MenuId,
     quit_id: MenuId,
@@ -32,11 +35,13 @@ impl Tray {
 
     fn build(click_through: bool) -> Result<Self, String> {
         let refresh_item = MenuItem::new("Refresh Now", true, None);
+        let show_hide_item = MenuItem::new("Show/Hide Widget", true, None);
         let click_through_item = CheckMenuItem::new("Click-through", true, click_through, None);
         let quit_item = MenuItem::new("Quit claudex-bar", true, None);
 
         let menu = Menu::new();
         menu.append(&refresh_item).map_err(|e| e.to_string())?;
+        menu.append(&show_hide_item).map_err(|e| e.to_string())?;
         menu.append(&click_through_item)
             .map_err(|e| e.to_string())?;
         menu.append(&PredefinedMenuItem::separator())
@@ -54,6 +59,7 @@ impl Tray {
         Ok(Self {
             _icon: icon,
             refresh_id: refresh_item.id().clone(),
+            show_hide_id: show_hide_item.id().clone(),
             click_through_id: click_through_item.id().clone(),
             click_through_item,
             quit_id: quit_item.id().clone(),
@@ -66,6 +72,8 @@ impl Tray {
             .filter_map(|event| {
                 if event.id == self.refresh_id {
                     Some(TrayCommand::Refresh)
+                } else if event.id == self.show_hide_id {
+                    Some(TrayCommand::ToggleVisible)
                 } else if event.id == self.click_through_id {
                     Some(TrayCommand::ToggleClickThrough)
                 } else if event.id == self.quit_id {

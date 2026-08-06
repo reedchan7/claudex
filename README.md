@@ -187,7 +187,9 @@ Every usage command accepts `--json` to print a normalized JSON snapshot instead
 
 ### `claudex-bar` (desktop widget, macOS)
 
-A small always-on-desktop floating card that shows the same bars the CLI prints, rebuilt from `claudex usage --all --json` every few minutes. The bar process never touches the network or credentials itself — it spawns the `claudex` CLI and renders the JSON snapshot, so token refresh stays in one place. It runs as an accessory app (no Dock icon), floats below normal windows, and can be dragged anywhere; its position is remembered in `~/.claudex/bar.json`. A menu-bar icon offers Refresh Now, a Click-through toggle (mouse passes through the card), and Quit.
+A small always-on-desktop floating card that shows the same bars the CLI prints, rebuilt from `claudex usage --all --json` every few minutes. The bar process never touches the network or credentials itself — it spawns the `claudex` CLI and renders the JSON snapshot, so token refresh stays in one place. It follows the system light/dark appearance, runs as an accessory app (no Dock icon), floats below normal windows, and can be dragged anywhere; its position is remembered in `~/.claudex/bar.json`.
+
+The card has a header row: **▾/▸ Agent Usage** collapses the whole widget to a one-line-per-provider mini view, **↻** refreshes now (a spinner shows while a poll is in flight), and **×** hides the window. Click any provider's header to collapse/expand just that section. Collapse state, mini mode, and window position all persist across restarts. The menu-bar icon offers Refresh Now, Show/Hide Widget, a Click-through toggle (mouse passes through the card), and Quit.
 
 ```sh
 make bar                          # build target/release/claudex-bar (Rust required)

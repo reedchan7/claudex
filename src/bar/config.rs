@@ -1,12 +1,19 @@
-//! Window-position persistence for claudex-bar (`~/.claudex/bar.json`).
+//! Widget state persistence for claudex-bar (`~/.claudex/bar.json`):
+//! window position, collapsed providers, and mini mode.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct BarConfig {
     pub x: Option<f32>,
     pub y: Option<f32>,
+    /// Provider ids the user collapsed in the widget (e.g. "claude").
+    #[serde(default)]
+    pub collapsed: Vec<String>,
+    /// Whole-widget mini mode: one compact line per provider.
+    #[serde(default)]
+    pub mini: bool,
 }
 
 impl BarConfig {
@@ -54,7 +61,8 @@ mod tests {
         assert_eq!(
             BarConfig {
                 x: Some(10.0),
-                y: None
+                y: None,
+                ..Default::default()
             }
             .position(),
             None
@@ -62,7 +70,8 @@ mod tests {
         assert_eq!(
             BarConfig {
                 x: Some(10.0),
-                y: Some(20.5)
+                y: Some(20.5),
+                ..Default::default()
             }
             .position(),
             Some((10.0, 20.5))
@@ -74,10 +83,23 @@ mod tests {
         let config = BarConfig {
             x: Some(42.0),
             y: Some(17.0),
+            collapsed: vec!["claude".to_string()],
+            mini: true,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: BarConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.position(), Some((42.0, 17.0)));
+        assert_eq!(parsed.collapsed, ["claude"]);
+        assert!(parsed.mini);
+    }
+
+    #[test]
+    fn json_without_widget_state_uses_defaults() {
+        // Config files written by older versions have only x/y.
+        let parsed: BarConfig = serde_json::from_str(r#"{"x": 1.0, "y": 2.0}"#).unwrap();
+        assert_eq!(parsed.position(), Some((1.0, 2.0)));
+        assert!(parsed.collapsed.is_empty());
+        assert!(!parsed.mini);
     }
 
     #[test]

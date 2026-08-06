@@ -15,13 +15,15 @@ use eframe::egui;
 
 use crate::snapshot::Snapshot;
 
-pub enum PollResult {
+pub enum PollEvent {
+    /// A poll just started — the UI can show a loading indicator.
+    Started,
     Ok(Snapshot),
     Err(String),
 }
 
 pub struct Poller {
-    results: Receiver<PollResult>,
+    results: Receiver<PollEvent>,
     refresh: Sender<()>,
 }
 
@@ -37,6 +39,11 @@ impl Poller {
 
         thread::spawn(move || {
             loop {
+                if result_tx.send(PollEvent::Started).is_err() {
+                    return;
+                }
+                ctx.request_repaint();
+
                 let result = poll_once(&claudex_bin, &skip);
                 if result_tx.send(result).is_err() {
                     return;
@@ -60,12 +67,12 @@ impl Poller {
         let _ = self.refresh.send(());
     }
 
-    pub fn drain(&self) -> impl Iterator<Item = PollResult> + '_ {
+    pub fn drain(&self) -> impl Iterator<Item = PollEvent> + '_ {
         self.results.try_iter()
     }
 }
 
-fn poll_once(claudex_bin: &PathBuf, skip: &[String]) -> PollResult {
+fn poll_once(claudex_bin: &PathBuf, skip: &[String]) -> PollEvent {
     let mut command = Command::new(claudex_bin);
     command.args(["usage", "--all", "--json"]);
     for name in skip {
@@ -76,18 +83,18 @@ fn poll_once(claudex_bin: &PathBuf, skip: &[String]) -> PollResult {
         Ok(output) => {
             if output.stdout.is_empty() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return PollResult::Err(format!(
+                return PollEvent::Err(format!(
                     "claudex printed no JSON (exit {:?}): {}",
                     output.status.code(),
                     stderr.trim()
                 ));
             }
             match serde_json::from_slice::<Snapshot>(&output.stdout) {
-                Ok(snapshot) => PollResult::Ok(snapshot),
-                Err(e) => PollResult::Err(format!("failed to parse claudex JSON: {e}")),
+                Ok(snapshot) => PollEvent::Ok(snapshot),
+                Err(e) => PollEvent::Err(format!("failed to parse claudex JSON: {e}")),
             }
         }
-        Err(e) => PollResult::Err(format!("failed to run {}: {e}", claudex_bin.display())),
+        Err(e) => PollEvent::Err(format!("failed to run {}: {e}", claudex_bin.display())),
     }
 }
 
@@ -122,8 +129,8 @@ mod tests {
     fn poll_once_reports_missing_binary() {
         let result = poll_once(&PathBuf::from("/nonexistent/claudex"), &[]);
         match result {
-            PollResult::Err(e) => assert!(e.contains("failed to run")),
-            PollResult::Ok(_) => panic!("expected spawn failure"),
+            PollEvent::Err(e) => assert!(e.contains("failed to run")),
+            _ => panic!("expected spawn failure"),
         }
     }
 }
