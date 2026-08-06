@@ -33,12 +33,12 @@ const WINDOW_PAD: f32 = 16.0;
 const MIN_INTERVAL_SECS: u64 = 60;
 const DEFAULT_INTERVAL_SECS: u64 = 600;
 
-const SIZE_TITLE: f32 = 16.5;
-const SIZE_PROVIDER: f32 = 16.0;
-const SIZE_BLOCK: f32 = 13.5;
-const SIZE_BAR_TEXT: f32 = 12.5;
-const SIZE_DETAIL: f32 = 12.0;
-const SIZE_FOOTER: f32 = 11.0;
+const SIZE_TITLE: f32 = 17.5;
+const SIZE_PROVIDER: f32 = 16.5;
+const SIZE_BLOCK: f32 = 14.5;
+const SIZE_BAR_TEXT: f32 = 13.5;
+const SIZE_DETAIL: f32 = 13.0;
+const SIZE_FOOTER: f32 = 12.0;
 const BAR_HEIGHT: f32 = 8.0;
 
 /// Desktop widget showing claudex usage
@@ -219,6 +219,7 @@ struct BarApp {
     hidden: bool,
     click_through: bool,
     config: BarConfig,
+    interval_open: bool,
     interval_editing: bool,
     interval_input: String,
     interval_error: Option<String>,
@@ -245,6 +246,7 @@ impl BarApp {
             hidden: false,
             click_through,
             config,
+            interval_open: false,
             interval_editing: false,
             interval_input: String::new(),
             interval_error: None,
@@ -345,14 +347,22 @@ impl eframe::App for BarApp {
         let content_height = CentralPanel::default()
             .frame(panel_frame(palette))
             .show(ui, |ui| {
-                let content = ui.vertical(|ui| {
-                    self.content_ui(ui, palette);
-                });
-                // Drag anywhere on the card to move the window.
-                let drag = ui.interact(ui.max_rect(), egui::Id::new("window-drag"), Sense::drag());
+                // Drag anywhere on the card to move the window. Registered
+                // FIRST so clickable widgets drawn on top win click hits, and
+                // with click_and_drag so a plain press never starts an OS
+                // window drag (Sense::drag alone starts dragging on press,
+                // which swallows the click for the widget underneath).
+                let drag = ui.interact(
+                    ui.max_rect(),
+                    egui::Id::new("window-drag"),
+                    Sense::click_and_drag(),
+                );
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
                 }
+                let content = ui.vertical(|ui| {
+                    self.content_ui(ui, palette);
+                });
                 content.response.rect.height()
             })
             .inner;
@@ -408,8 +418,31 @@ impl BarApp {
                     .size(SIZE_FOOTER)
                     .color(palette.faint),
             );
-            self.interval_picker(ui, palette);
+            let toggle = ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(format!(
+                            "every {}{}",
+                            interval_label(self.poller.interval_secs()),
+                            if self.interval_open { " ▴" } else { " ▾" }
+                        ))
+                        .size(SIZE_FOOTER)
+                        .color(palette.faint),
+                    )
+                    .frame(false),
+                )
+                .on_hover_cursor(CursorIcon::PointingHand);
+            if toggle.clicked() {
+                self.interval_open = !self.interval_open;
+                if !self.interval_open {
+                    self.interval_editing = false;
+                    self.interval_error = None;
+                }
+            }
         });
+        if self.interval_open {
+            self.interval_chips(ui, palette);
+        }
         if let Some(error) = &self.interval_error {
             ui.label(RichText::new(error).size(SIZE_FOOTER).color(palette.error));
         }
@@ -422,57 +455,54 @@ impl BarApp {
         }
     }
 
-    /// Preset/custom poll-interval selector in the footer.
-    fn interval_picker(&mut self, ui: &mut Ui, palette: Palette) {
+    /// Inline interval options shown under the footer when the picker opens —
+    /// no popup, so nothing is clipped by the card's auto-sized window.
+    fn interval_chips(&mut self, ui: &mut Ui, palette: Palette) {
         let secs = self.poller.interval_secs();
-        egui::ComboBox::from_id_salt("poll-interval")
-            .selected_text(
-                RichText::new(format!("every {}", interval_label(secs)))
-                    .size(SIZE_FOOTER)
-                    .color(palette.faint),
-            )
-            .show_ui(ui, |ui| {
-                for (value, name) in [
-                    (120, "2m"),
-                    (300, "5m"),
-                    (600, "10m"),
-                    (1800, "30m"),
-                    (3600, "1h"),
-                ] {
-                    if ui
-                        .selectable_label(secs == value, RichText::new(name).size(12.0))
-                        .clicked()
-                    {
-                        self.apply_interval(value);
-                    }
+        ui.horizontal(|ui| {
+            for (value, name) in [
+                (120, "2m"),
+                (300, "5m"),
+                (600, "10m"),
+                (1800, "30m"),
+                (3600, "1h"),
+            ] {
+                if chip(ui, name, secs == value, palette).clicked() {
+                    self.apply_interval(value);
+                    self.interval_open = false;
                 }
-                if ui
-                    .selectable_label(self.interval_editing, RichText::new("Custom…").size(12.0))
-                    .clicked()
-                {
-                    self.interval_editing = true;
-                    self.interval_input = interval_label(secs);
-                }
-            });
+            }
+            if chip(ui, "Custom", self.interval_editing, palette).clicked() {
+                self.interval_editing = true;
+                self.interval_input = interval_label(secs);
+            }
+        });
         if self.interval_editing {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.interval_input)
-                    .desired_width(76.0)
+                    .desired_width(96.0)
                     .hint_text("90s, 10m, 1h30m")
                     .font(egui::FontId::new(
                         SIZE_FOOTER,
                         egui::FontFamily::Proportional,
                     )),
             );
+            if !response.has_focus() {
+                response.request_focus();
+            }
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 match parse_interval(&self.interval_input) {
-                    Some(value) if value >= MIN_INTERVAL_SECS => self.apply_interval(value),
+                    Some(value) if value >= MIN_INTERVAL_SECS => {
+                        self.apply_interval(value);
+                        self.interval_open = false;
+                    }
                     _ => {
                         self.interval_error = Some("use 90s / 10m / 1h30m (min 60s)".to_string());
                     }
                 }
             }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.interval_open = false;
                 self.interval_editing = false;
                 self.interval_error = None;
             }
@@ -489,8 +519,7 @@ impl BarApp {
 
     fn header_ui(&mut self, ui: &mut Ui, palette: Palette) {
         ui.horizontal(|ui| {
-            let mini_toggle = if self.config.mini { "▸" } else { "▾" };
-            if icon_button(ui, mini_toggle, palette).clicked() {
+            if chevron_toggle(ui, !self.config.mini, palette) {
                 self.config.mini = !self.config.mini;
                 config::save(&self.config);
             }
@@ -528,6 +557,68 @@ fn panel_frame(palette: Palette) -> Frame {
 fn icon_button(ui: &mut Ui, text: &str, palette: Palette) -> egui::Response {
     ui.add(egui::Button::new(RichText::new(text).size(15.0).color(palette.secondary)).frame(false))
         .on_hover_cursor(CursorIcon::PointingHand)
+}
+
+/// Small selectable option button used by the interval picker.
+fn chip(ui: &mut Ui, text: &str, selected: bool, palette: Palette) -> egui::Response {
+    let text_color = if selected {
+        palette.primary
+    } else {
+        palette.secondary
+    };
+    let fill = if selected {
+        palette.hover_fill
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.add(
+        egui::Button::new(RichText::new(text).size(SIZE_FOOTER).color(text_color))
+            .fill(fill)
+            .stroke(Stroke::new(1.0, palette.card_stroke)),
+    )
+    .on_hover_cursor(CursorIcon::PointingHand)
+}
+
+/// Stroke a disclosure chevron (down when `expanded`, right otherwise) at the
+/// given center — crisper than a text glyph at small sizes.
+fn paint_chevron_at(painter: &egui::Painter, center: egui::Pos2, expanded: bool, color: Color32) {
+    let (half_width, half_height) = (4.2, 2.6);
+    let (a, b, c) = if expanded {
+        (
+            egui::pos2(center.x - half_width, center.y - half_height + 0.5),
+            egui::pos2(center.x, center.y + half_height + 0.5),
+            egui::pos2(center.x + half_width, center.y - half_height + 0.5),
+        )
+    } else {
+        (
+            egui::pos2(center.x - half_height, center.y - half_width),
+            egui::pos2(center.x + half_height, center.y),
+            egui::pos2(center.x - half_height, center.y + half_width),
+        )
+    };
+    let stroke = Stroke::new(1.6, color);
+    painter.line_segment([a, b], stroke);
+    painter.line_segment([b, c], stroke);
+}
+
+/// Allocate a chevron slot in a horizontal row (non-interactive; the
+/// enclosing row handles clicks).
+fn paint_chevron(ui: &mut Ui, expanded: bool, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(14.0, 16.0), Sense::hover());
+    paint_chevron_at(ui.painter(), rect.center(), expanded, color);
+}
+
+/// Standalone clickable chevron (used for the whole-widget mini toggle).
+fn chevron_toggle(ui: &mut Ui, expanded: bool, palette: Palette) -> bool {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
+    let response = response.on_hover_cursor(CursorIcon::PointingHand);
+    let color = if response.hovered() {
+        palette.secondary
+    } else {
+        palette.faint
+    };
+    paint_chevron_at(ui.painter(), rect.center(), expanded, color);
+    response.clicked()
 }
 
 fn utilization_color(percent: f64) -> Color32 {
@@ -623,7 +714,7 @@ fn provider_header(
     accent: Color32,
 ) -> bool {
     let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::click());
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
     let response = response.on_hover_cursor(CursorIcon::PointingHand);
     if response.hovered() {
         ui.painter().rect_filled(rect, 6, palette.hover_fill);
@@ -634,8 +725,7 @@ fn provider_header(
             .max_rect(rect.shrink2(Vec2::new(6.0, 0.0)))
             .layout(Layout::left_to_right(Align::Center)),
     );
-    let chevron = if collapsed { "▸" } else { "▾" };
-    row.label(RichText::new(chevron).size(14.0).color(palette.faint));
+    paint_chevron(&mut row, !collapsed, palette.faint);
     row.add_space(2.0);
     row.label(
         RichText::new(&provider.label)
