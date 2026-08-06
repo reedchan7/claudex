@@ -189,7 +189,7 @@ Every usage command accepts `--json` to print a normalized JSON snapshot instead
 
 A small always-on-desktop floating card that shows the same bars the CLI prints, rebuilt from `claudex usage --all --json` every few minutes. The bar process never touches the network or credentials itself — it spawns the `claudex` CLI and renders the JSON snapshot, so token refresh stays in one place. It follows the system light/dark appearance, runs as an accessory app (no Dock icon), floats below normal windows, and can be dragged anywhere; its position is remembered in `~/.claudex/bar.json`.
 
-The card has a header row: **▾/▸ Agent Usage** collapses the whole widget to a one-line-per-provider mini view, **↻** refreshes now (a spinner shows while a poll is in flight), and **×** hides the window. Click any provider's header to collapse/expand just that section. Collapse state, mini mode, and window position all persist across restarts. The menu-bar icon offers Refresh Now, Show/Hide Widget, a Click-through toggle (mouse passes through the card), and Quit.
+The card has a header row: **▾/▸ Agent Usage** collapses the whole widget to a one-line-per-provider mini view, **↻** refreshes now (a spinner shows while a poll is in flight), and **×** hides the window. Each provider sits in its own tinted section with an accent-colored edge; click a provider's header to collapse/expand just that section (collapsed sections show their peak usage). The footer picks the poll interval: presets 2m / 5m / 10m (default) / 30m / 1h, or Custom… for values like `90s`, `10m`, `1h30m`. Collapse state, mini mode, interval, and window position all persist across restarts. The menu-bar icon offers Refresh Now, Show/Hide Widget, a Click-through toggle (mouse passes through the card), and Quit.
 
 ```sh
 make bar                          # build target/release/claudex-bar (Rust required)
@@ -197,7 +197,7 @@ make bar                          # build target/release/claudex-bar (Rust requi
 ./target/release/claudex-bar --skip grok,kimi --interval 120
 ```
 
-Flags: `--skip <agent>...` (same names as `usage --all --skip`), `--interval <secs>` (default 300, minimum 60), `--click-through` (start in click-through mode). It finds the `claudex` binary via `$CLAUDEX_BIN`, then its own directory, then `$PATH`. The GUI dependencies (egui + tray-icon) are gated behind the `bar` cargo feature, so CLI-only builds and installs are unchanged.
+Flags: `--skip <agent>...` (same names as `usage --all --skip`), `--interval <secs>` (overrides the saved interval for that run; minimum 60), `--click-through` (start in click-through mode). It finds the `claudex` binary via `$CLAUDEX_BIN`, then its own directory, then `$PATH`. The GUI dependencies (egui + tray-icon) are gated behind the `bar` cargo feature, so CLI-only builds and installs are unchanged.
 
 ### `claudex update`
 

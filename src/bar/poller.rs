@@ -7,6 +7,8 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
@@ -25,17 +27,20 @@ pub enum PollEvent {
 pub struct Poller {
     results: Receiver<PollEvent>,
     refresh: Sender<()>,
+    interval_secs: Arc<AtomicU64>,
 }
 
 impl Poller {
     pub fn start(
         claudex_bin: PathBuf,
         skip: Vec<String>,
-        interval: Duration,
+        interval_secs: u64,
         ctx: egui::Context,
     ) -> Self {
         let (result_tx, result_rx) = mpsc::channel();
         let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
+        let interval = Arc::new(AtomicU64::new(interval_secs));
+        let interval_shared = Arc::clone(&interval);
 
         thread::spawn(move || {
             loop {
@@ -50,7 +55,8 @@ impl Poller {
                 }
                 ctx.request_repaint();
 
-                match refresh_rx.recv_timeout(interval) {
+                let wait = Duration::from_secs(interval_shared.load(Ordering::Relaxed));
+                match refresh_rx.recv_timeout(wait) {
                     Ok(()) | Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
@@ -60,11 +66,23 @@ impl Poller {
         Self {
             results: result_rx,
             refresh: refresh_tx,
+            interval_secs: interval,
         }
     }
 
     pub fn refresh_now(&self) {
         let _ = self.refresh.send(());
+    }
+
+    pub fn interval_secs(&self) -> u64 {
+        self.interval_secs.load(Ordering::Relaxed)
+    }
+
+    /// Change the poll interval; wakes the poller so the new cadence (and a
+    /// fresh poll) applies immediately.
+    pub fn set_interval_secs(&self, secs: u64) {
+        self.interval_secs.store(secs, Ordering::Relaxed);
+        self.refresh_now();
     }
 
     pub fn drain(&self) -> impl Iterator<Item = PollEvent> + '_ {

@@ -14,6 +14,10 @@ pub struct BarConfig {
     /// Whole-widget mini mode: one compact line per provider.
     #[serde(default)]
     pub mini: bool,
+    /// Poll interval chosen in the widget, in seconds. The `--interval` CLI
+    /// flag overrides this for that run.
+    #[serde(default)]
+    pub interval_secs: Option<u64>,
 }
 
 impl BarConfig {
@@ -85,12 +89,14 @@ mod tests {
             y: Some(17.0),
             collapsed: vec!["claude".to_string()],
             mini: true,
+            interval_secs: Some(600),
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: BarConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.position(), Some((42.0, 17.0)));
         assert_eq!(parsed.collapsed, ["claude"]);
         assert!(parsed.mini);
+        assert_eq!(parsed.interval_secs, Some(600));
     }
 
     #[test]

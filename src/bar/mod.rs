@@ -25,20 +25,21 @@ use crate::commands::status::Provider;
 use crate::snapshot::{ProviderSnapshot, ProviderState, Row, Snapshot};
 
 use config::BarConfig;
-use format::{age_label, refreshed_detail};
+use format::{age_label, interval_label, parse_interval, refreshed_detail};
 use poller::{PollEvent, Poller};
 
-const WINDOW_WIDTH: f32 = 340.0;
-const WINDOW_PAD: f32 = 14.0;
+const WINDOW_WIDTH: f32 = 380.0;
+const WINDOW_PAD: f32 = 16.0;
 const MIN_INTERVAL_SECS: u64 = 60;
+const DEFAULT_INTERVAL_SECS: u64 = 600;
 
-const SIZE_TITLE: f32 = 13.5;
-const SIZE_PROVIDER: f32 = 14.0;
-const SIZE_BLOCK: f32 = 12.0;
-const SIZE_BAR_TEXT: f32 = 11.0;
-const SIZE_DETAIL: f32 = 10.5;
-const SIZE_FOOTER: f32 = 10.0;
-const BAR_HEIGHT: f32 = 7.0;
+const SIZE_TITLE: f32 = 16.5;
+const SIZE_PROVIDER: f32 = 16.0;
+const SIZE_BLOCK: f32 = 13.5;
+const SIZE_BAR_TEXT: f32 = 12.5;
+const SIZE_DETAIL: f32 = 12.0;
+const SIZE_FOOTER: f32 = 11.0;
+const BAR_HEIGHT: f32 = 8.0;
 
 /// Desktop widget showing claudex usage
 #[derive(Parser)]
@@ -47,9 +48,9 @@ struct BarArgs {
     /// Skip one or more providers (repeatable or comma-separated)
     #[arg(long = "skip", value_name = "AGENT", action = clap::ArgAction::Append, value_delimiter = ',')]
     skip: Vec<String>,
-    /// Poll interval in seconds (minimum 60)
-    #[arg(long, default_value_t = 300, value_name = "SECS")]
-    interval: u64,
+    /// Poll interval in seconds (overrides the saved setting; minimum 60)
+    #[arg(long, value_name = "SECS")]
+    interval: Option<u64>,
     /// Start with click-through enabled (window ignores the mouse; toggle via tray menu)
     #[arg(long)]
     click_through: bool,
@@ -60,6 +61,8 @@ struct BarArgs {
 struct Palette {
     card_fill: Color32,
     card_stroke: Color32,
+    section_fill: Color32,
+    hover_fill: Color32,
     primary: Color32,
     secondary: Color32,
     faint: Color32,
@@ -80,6 +83,8 @@ impl Palette {
         Self {
             card_fill: Color32::from_rgba_unmultiplied(22, 22, 27, 236),
             card_stroke: Color32::from_white_alpha(18),
+            section_fill: Color32::from_white_alpha(9),
+            hover_fill: Color32::from_white_alpha(16),
             primary: Color32::from_gray(235),
             secondary: Color32::from_gray(205),
             faint: Color32::from_gray(150),
@@ -93,6 +98,8 @@ impl Palette {
         Self {
             card_fill: Color32::from_rgba_unmultiplied(250, 250, 252, 238),
             card_stroke: Color32::from_black_alpha(24),
+            section_fill: Color32::from_black_alpha(7),
+            hover_fill: Color32::from_black_alpha(14),
             primary: Color32::from_gray(25),
             secondary: Color32::from_gray(55),
             faint: Color32::from_gray(105),
@@ -113,10 +120,12 @@ pub fn run() -> eframe::Result<()> {
         }
     }
 
-    let interval = args.interval.max(MIN_INTERVAL_SECS);
-    if args.interval < MIN_INTERVAL_SECS {
-        eprintln!("note: interval clamped to {MIN_INTERVAL_SECS}s minimum");
-    }
+    let saved = config::load();
+    let interval = args
+        .interval
+        .or(saved.interval_secs)
+        .unwrap_or(DEFAULT_INTERVAL_SECS)
+        .max(MIN_INTERVAL_SECS);
 
     let claudex_bin = match poller::resolve_claudex_bin() {
         Ok(path) => path,
@@ -126,7 +135,6 @@ pub fn run() -> eframe::Result<()> {
         }
     };
 
-    let saved = config::load();
     let mut viewport = ViewportBuilder::default()
         .with_title("claudex bar")
         .with_inner_size([WINDOW_WIDTH, 240.0])
@@ -156,19 +164,8 @@ pub fn run() -> eframe::Result<()> {
             install_system_font(&cc.egui_ctx);
 
             let tray = tray::Tray::new(click_through);
-            let poller = Poller::start(
-                claudex_bin,
-                skip,
-                Duration::from_secs(interval),
-                cc.egui_ctx.clone(),
-            );
-            Ok(Box::new(BarApp::new(
-                poller,
-                tray,
-                saved,
-                click_through,
-                interval,
-            )))
+            let poller = Poller::start(claudex_bin, skip, interval, cc.egui_ctx.clone());
+            Ok(Box::new(BarApp::new(poller, tray, saved, click_through)))
         }),
     )
 }
@@ -221,8 +218,10 @@ struct BarApp {
     loading: bool,
     hidden: bool,
     click_through: bool,
-    interval: Duration,
     config: BarConfig,
+    interval_editing: bool,
+    interval_input: String,
+    interval_error: Option<String>,
     last_pos: Option<(f32, f32)>,
     pos_changed_at: Option<Instant>,
     desired_height: f32,
@@ -235,7 +234,6 @@ impl BarApp {
         tray: Option<tray::Tray>,
         config: BarConfig,
         click_through: bool,
-        interval_secs: u64,
     ) -> Self {
         Self {
             poller,
@@ -246,8 +244,10 @@ impl BarApp {
             loading: true, // first poll starts immediately
             hidden: false,
             click_through,
-            interval: Duration::from_secs(interval_secs),
             config,
+            interval_editing: false,
+            interval_input: String::new(),
+            interval_error: None,
             last_pos: None,
             pos_changed_at: None,
             desired_height: 0.0,
@@ -402,14 +402,17 @@ impl BarApp {
             .last_success
             .map(|at| age_label(at.elapsed().as_secs()))
             .unwrap_or_else(|| "never".to_string());
-        ui.label(
-            RichText::new(format!(
-                "Updated {updated} · every {}m",
-                self.interval.as_secs() / 60
-            ))
-            .size(SIZE_FOOTER)
-            .color(palette.faint),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Updated {updated} ·"))
+                    .size(SIZE_FOOTER)
+                    .color(palette.faint),
+            );
+            self.interval_picker(ui, palette);
+        });
+        if let Some(error) = &self.interval_error {
+            ui.label(RichText::new(error).size(SIZE_FOOTER).color(palette.error));
+        }
         if let Some(error) = &self.last_error {
             ui.label(
                 RichText::new(format!("refresh failed: {error}"))
@@ -417,6 +420,71 @@ impl BarApp {
                     .color(palette.error),
             );
         }
+    }
+
+    /// Preset/custom poll-interval selector in the footer.
+    fn interval_picker(&mut self, ui: &mut Ui, palette: Palette) {
+        let secs = self.poller.interval_secs();
+        egui::ComboBox::from_id_salt("poll-interval")
+            .selected_text(
+                RichText::new(format!("every {}", interval_label(secs)))
+                    .size(SIZE_FOOTER)
+                    .color(palette.faint),
+            )
+            .show_ui(ui, |ui| {
+                for (value, name) in [
+                    (120, "2m"),
+                    (300, "5m"),
+                    (600, "10m"),
+                    (1800, "30m"),
+                    (3600, "1h"),
+                ] {
+                    if ui
+                        .selectable_label(secs == value, RichText::new(name).size(12.0))
+                        .clicked()
+                    {
+                        self.apply_interval(value);
+                    }
+                }
+                if ui
+                    .selectable_label(self.interval_editing, RichText::new("Custom…").size(12.0))
+                    .clicked()
+                {
+                    self.interval_editing = true;
+                    self.interval_input = interval_label(secs);
+                }
+            });
+        if self.interval_editing {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.interval_input)
+                    .desired_width(76.0)
+                    .hint_text("90s, 10m, 1h30m")
+                    .font(egui::FontId::new(
+                        SIZE_FOOTER,
+                        egui::FontFamily::Proportional,
+                    )),
+            );
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                match parse_interval(&self.interval_input) {
+                    Some(value) if value >= MIN_INTERVAL_SECS => self.apply_interval(value),
+                    _ => {
+                        self.interval_error = Some("use 90s / 10m / 1h30m (min 60s)".to_string());
+                    }
+                }
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.interval_editing = false;
+                self.interval_error = None;
+            }
+        }
+    }
+
+    fn apply_interval(&mut self, secs: u64) {
+        self.poller.set_interval_secs(secs);
+        self.config.interval_secs = Some(secs);
+        config::save(&self.config);
+        self.interval_editing = false;
+        self.interval_error = None;
     }
 
     fn header_ui(&mut self, ui: &mut Ui, palette: Palette) {
@@ -437,13 +505,15 @@ impl BarApp {
                     self.set_visible(ui.ctx(), false);
                 }
                 if self.loading {
-                    ui.add(Spinner::new().size(13.0).color(palette.secondary));
+                    ui.add(Spinner::new().size(15.0).color(palette.secondary));
                 } else if icon_button(ui, "↻", palette).clicked() {
                     self.poller.refresh_now();
                     self.loading = true;
                 }
             });
         });
+        ui.add_space(2.0);
+        ui.separator();
     }
 }
 
@@ -456,7 +526,7 @@ fn panel_frame(palette: Palette) -> Frame {
 }
 
 fn icon_button(ui: &mut Ui, text: &str, palette: Palette) -> egui::Response {
-    ui.add(egui::Button::new(RichText::new(text).size(13.0).color(palette.secondary)).frame(false))
+    ui.add(egui::Button::new(RichText::new(text).size(15.0).color(palette.secondary)).frame(false))
         .on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -489,63 +559,101 @@ fn provider_ui(ui: &mut Ui, palette: Palette, provider: &ProviderSnapshot, confi
     let (r, g, b) = provider.accent;
     let accent = Color32::from_rgb(r, g, b);
     let collapsed = config.collapsed.iter().any(|id| id == &provider.id);
-    let arrow = if collapsed { "▸" } else { "▾" };
 
-    let header = ui
-        .add(
-            egui::Label::new(
-                RichText::new(format!("{arrow} {}", provider.label))
-                    .size(SIZE_PROVIDER)
-                    .color(accent)
-                    .strong(),
-            )
-            .sense(Sense::click()),
-        )
-        .on_hover_cursor(CursorIcon::PointingHand);
-    if header.clicked() {
-        if collapsed {
-            config.collapsed.retain(|id| id != &provider.id);
-        } else {
-            config.collapsed.push(provider.id.clone());
-        }
-        config::save(config);
-    }
-
-    if collapsed {
-        let summary = match max_percent(provider) {
-            Some(max) => format!("peak {:.0}% used", max),
-            None => "unavailable".to_string(),
-        };
-        ui.label(
-            RichText::new(summary)
-                .size(SIZE_DETAIL)
-                .color(palette.faint),
-        );
-        return;
-    }
-
-    match &provider.state {
-        ProviderState::Ok { blocks } => {
-            for block in blocks {
-                block_ui(ui, palette, block);
+    let section = Frame::new()
+        .fill(palette.section_fill)
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(Margin::symmetric(8, 8))
+        .show(ui, |ui| {
+            if provider_header(ui, palette, provider, collapsed, accent) {
+                if collapsed {
+                    config.collapsed.retain(|id| id != &provider.id);
+                } else {
+                    config.collapsed.push(provider.id.clone());
+                }
+                config::save(config);
             }
-        }
-        ProviderState::Unavailable {
-            heading, next_step, ..
-        } => {
-            ui.add_space(4.0);
-            let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), BAR_HEIGHT), Sense::hover());
-            ui.painter().rect_filled(rect, 3, palette.empty_bar);
-            ui.add_space(3.0);
-            ui.label(RichText::new(heading).size(SIZE_DETAIL).color(palette.warn));
-            ui.label(
-                RichText::new(next_step)
-                    .size(SIZE_FOOTER)
-                    .color(palette.faint),
-            );
-        }
+
+            if collapsed {
+                return;
+            }
+            match &provider.state {
+                ProviderState::Ok { blocks } => {
+                    for block in blocks {
+                        block_ui(ui, palette, block);
+                    }
+                }
+                ProviderState::Unavailable {
+                    heading, next_step, ..
+                } => {
+                    ui.add_space(4.0);
+                    let (rect, _) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), BAR_HEIGHT),
+                        Sense::hover(),
+                    );
+                    ui.painter().rect_filled(rect, 4, palette.empty_bar);
+                    ui.add_space(3.0);
+                    ui.label(RichText::new(heading).size(SIZE_DETAIL).color(palette.warn));
+                    ui.label(
+                        RichText::new(next_step)
+                            .size(SIZE_FOOTER)
+                            .color(palette.faint),
+                    );
+                }
+            }
+        });
+
+    // Accent strip along the section's left edge.
+    let rect = section.response.rect;
+    let strip = egui::Rect::from_min_size(
+        rect.min + Vec2::new(2.0, 6.0),
+        Vec2::new(3.0, (rect.height() - 12.0).max(0.0)),
+    );
+    ui.painter()
+        .rect_filled(strip, 2, accent.gamma_multiply(0.85));
+}
+
+/// Collapse toggle row for one provider section: chevron + name, with a
+/// hover highlight so it reads as clickable. Returns true when clicked.
+fn provider_header(
+    ui: &mut Ui,
+    palette: Palette,
+    provider: &ProviderSnapshot,
+    collapsed: bool,
+    accent: Color32,
+) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::click());
+    let response = response.on_hover_cursor(CursorIcon::PointingHand);
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 6, palette.hover_fill);
     }
+
+    let mut row = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(Vec2::new(6.0, 0.0)))
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let chevron = if collapsed { "▸" } else { "▾" };
+    row.label(RichText::new(chevron).size(14.0).color(palette.faint));
+    row.add_space(2.0);
+    row.label(
+        RichText::new(&provider.label)
+            .size(SIZE_PROVIDER)
+            .color(accent)
+            .strong(),
+    );
+    if collapsed {
+        row.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let (text, color) = match max_percent(provider) {
+                Some(max) => (format!("peak {max:.0}%"), utilization_color(max)),
+                None => ("unavailable".to_string(), palette.warn),
+            };
+            ui.label(RichText::new(text).size(SIZE_DETAIL).color(color));
+        });
+    }
+
+    response.clicked()
 }
 
 /// One-line-per-provider compact rendering for mini mode.
@@ -596,7 +704,7 @@ fn block_ui(ui: &mut Ui, palette: Palette, block: &crate::snapshot::Block) {
                 resets_at,
             } => {
                 ui.horizontal(|ui| {
-                    let bar_width = (ui.available_width() - 62.0).max(60.0);
+                    let bar_width = (ui.available_width() - 76.0).max(60.0);
                     let (rect, _) =
                         ui.allocate_exact_size(Vec2::new(bar_width, BAR_HEIGHT), Sense::hover());
                     let painter = ui.painter();
