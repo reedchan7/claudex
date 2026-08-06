@@ -75,6 +75,38 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Desktop widget commands (requires the `bar` feature)
+    #[cfg(feature = "bar")]
+    Widget {
+        #[command(subcommand)]
+        command: WidgetCommands,
+    },
+}
+
+/// Manage the desktop widget's background process.
+#[cfg(feature = "bar")]
+#[derive(Subcommand)]
+enum WidgetCommands {
+    /// Start the widget in the background
+    Start {
+        #[command(flatten)]
+        opts: claudex::bar::BarOptions,
+    },
+    /// Stop the background widget
+    Stop,
+    /// Restart the background widget
+    Restart {
+        #[command(flatten)]
+        opts: claudex::bar::BarOptions,
+    },
+    /// Show whether the widget is running
+    Status,
+    /// Run the widget in the foreground (used by `widget start`)
+    #[command(hide = true)]
+    Run {
+        #[command(flatten)]
+        opts: claudex::bar::BarOptions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -250,6 +282,19 @@ async fn main() {
             agents,
         } => commands::update::run(&agents, &skip, !no_post_check),
         Commands::SelfUpdate { check, force } => commands::self_update::run(check, force).await,
+        #[cfg(feature = "bar")]
+        Commands::Widget { command } => match command {
+            WidgetCommands::Start { opts } => commands::widget::start(opts),
+            WidgetCommands::Stop => commands::widget::stop(),
+            WidgetCommands::Restart { opts } => commands::widget::restart(opts),
+            WidgetCommands::Status => commands::widget::status(),
+            WidgetCommands::Run { opts } => {
+                if let Err(e) = commands::widget::run(opts) {
+                    eprintln!("✗ {e}");
+                    std::process::exit(1);
+                }
+            }
+        },
     }
 }
 
@@ -567,6 +612,65 @@ mod tests {
                 command: CodexCommands::Usage { json, .. },
             } => assert!(json),
             _ => panic!("expected gpt usage command"),
+        }
+    }
+
+    #[cfg(feature = "bar")]
+    #[test]
+    fn widget_start_parses_options() {
+        let cli = Cli::try_parse_from([
+            "claudex",
+            "widget",
+            "start",
+            "--skip",
+            "grok,kimi",
+            "--interval",
+            "300",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Widget {
+                command: WidgetCommands::Start { opts },
+            } => {
+                assert_eq!(opts.skip, ["grok", "kimi"]);
+                assert_eq!(opts.interval, Some(300));
+                assert!(!opts.click_through);
+            }
+            _ => panic!("expected widget start command"),
+        }
+    }
+
+    #[cfg(feature = "bar")]
+    #[test]
+    fn widget_stop_and_status_parse() {
+        let cli = Cli::try_parse_from(["claudex", "widget", "stop"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Widget {
+                command: WidgetCommands::Stop
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["claudex", "widget", "status"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Widget {
+                command: WidgetCommands::Status
+            }
+        ));
+    }
+
+    #[cfg(feature = "bar")]
+    #[test]
+    fn widget_run_is_hidden_but_parses() {
+        let cli = Cli::try_parse_from(["claudex", "widget", "run", "--click-through"]).unwrap();
+
+        match cli.command {
+            Commands::Widget {
+                command: WidgetCommands::Run { opts },
+            } => assert!(opts.click_through),
+            _ => panic!("expected widget run command"),
         }
     }
 }

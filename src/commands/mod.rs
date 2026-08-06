@@ -8,3 +8,5 @@ pub mod status;
 pub mod update;
 pub mod usage;
 pub mod usage_all;
+#[cfg(feature = "bar")]
+pub mod widget;

@@ -13,7 +13,7 @@ A handful of commands set the tone:
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
 - **`claudex grok usage`** — your [Grok Build](https://docs.x.ai/build) credit / plan usage from the same billing endpoint the Grok CLI uses: weekly (or current-period) usage by product, plus any on-demand / prepaid balances.
 - **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi Code, Reasonix, Pi, Grok). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated. Pass `--skip <agent>...` to exclude agents.
-- **`claudex-bar`** — a macOS desktop widget that pins a small translucent card to your desktop showing live usage for your agents, refreshed on a timer from `claudex usage --all --json`. Comes with a menu-bar icon for refresh / click-through / quit. Build it with `make bar`.
+- **`claudex widget start`** — a macOS desktop widget that pins a small translucent card to your desktop showing live usage for your agents, refreshed on a timer from `claudex usage --all --json`. Managed entirely from the CLI: `claudex widget start / stop / restart / status`. Comes with a menu-bar icon for refresh / click-through / quit. Requires the `bar` cargo feature — install it with `make install-bar`.
 - **`claudex self-update`** — update claudex itself in place: it downloads the latest release binary for your platform, verifies its checksum, and swaps in the new one (falling back to the install script if anything goes wrong). No Rust toolchain needed.
 
 No interactive session, no digging through a web app — just run the command and you're done.
@@ -185,19 +185,22 @@ It reads the xAI OAuth access token from `~/.grok/auth.json` (written by `grok l
 
 Every usage command accepts `--json` to print a normalized JSON snapshot instead of terminal bars — one `providers` array with per-provider status, preformatted bar/detail rows, and raw `resets_at` timestamps (schema version 1, see `src/snapshot.rs`). Unavailable providers are included with a structured `unavailable` state; the exit code is non-zero only when *none* are available. This is the data source for `claudex-bar` and any other shell integration (tmux, SketchyBar, waybar, …).
 
-### `claudex-bar` (desktop widget, macOS)
+### `claudex widget` (desktop widget, macOS)
 
-A small always-on-desktop floating card that shows the same bars the CLI prints, rebuilt from `claudex usage --all --json` every few minutes. The bar process never touches the network or credentials itself — it spawns the `claudex` CLI and renders the JSON snapshot, so token refresh stays in one place. It follows the system light/dark appearance, runs as an accessory app (no Dock icon), floats below normal windows, and can be dragged anywhere; its position is remembered in `~/.claudex/bar.json`.
-
-The card has a header row: **▾/▸ Agent Usage** collapses the whole widget to a one-line-per-provider mini view, **↻** refreshes now (a spinner shows while a poll is in flight), and **×** hides the window. Each provider sits in its own tinted section with an accent-colored edge; click a provider's header to collapse/expand just that section (collapsed sections show their peak usage). The footer picks the poll interval: presets 2m / 5m / 10m (default) / 30m / 1h, or Custom… for values like `90s`, `10m`, `1h30m`. Collapse state, mini mode, interval, and window position all persist across restarts. The menu-bar icon offers Refresh Now, Show/Hide Widget, a Click-through toggle (mouse passes through the card), and Quit.
+A small always-on-desktop floating card that shows the same bars the CLI prints, rebuilt from `claudex usage --all --json` every few minutes. The widget runs inside the `claudex` binary itself: `claudex widget start` re-executes `claudex widget run` detached, so it survives the terminal; the GUI process then polls snapshots by spawning the same binary. It follows the system light/dark appearance, runs as an accessory app (no Dock icon), floats below normal windows, and can be dragged anywhere; its position is remembered in `~/.claudex/bar.json`.
 
 ```sh
-make bar                          # build target/release/claudex-bar (Rust required)
-./target/release/claudex-bar      # run next to a claudex binary, or set CLAUDEX_BIN
-./target/release/claudex-bar --skip grok,kimi --interval 120
+make install-bar                 # install claudex with widget support (Rust required)
+claudex widget start             # launch the card in the background
+claudex widget start --skip grok,kimi --interval 300
+claudex widget status            # is it running?
+claudex widget restart           # stop + start
+claudex widget stop              # stop it
 ```
 
-Flags: `--skip <agent>...` (same names as `usage --all --skip`), `--interval <secs>` (overrides the saved interval for that run; minimum 60), `--click-through` (start in click-through mode). It finds the `claudex` binary via `$CLAUDEX_BIN`, then its own directory, then `$PATH`. The GUI dependencies (egui + tray-icon) are gated behind the `bar` cargo feature, so CLI-only builds and installs are unchanged.
+`start` / `restart` accept `--skip <agent>...`, `--interval <secs>` (overrides the saved interval for that run; minimum 60), and `--click-through`. The widget reports its PID via `~/.claudex/widget.pid` and logs to `~/.claudex/widget.log`. The GUI dependencies (egui + tray-icon) are gated behind the `bar` cargo feature, so plain CLI builds and installs are unchanged; prebuilt releases don't include the widget yet.
+
+The card has a header row: **▾/▸ Agent Usage** collapses the whole widget to a one-line-per-provider mini view, **↻** refreshes now (a spinner shows while a poll is in flight), and **×** hides the window. Each provider sits in its own tinted section with an accent-colored edge; click a provider's header to collapse/expand just that section (collapsed sections show their peak usage). The footer picks the poll interval: presets 2m / 5m / 10m (default) / 30m / 1h, or Custom… for values like `90s`, `10m`, `1h30m`. Collapse state, mini mode, interval, and window position all persist across restarts. The menu-bar icon offers Refresh Now, Show/Hide Widget, a Click-through toggle (mouse passes through the card), and Quit.
 
 ### `claudex update`
 
@@ -287,6 +290,10 @@ claudex update                # update all coding agents
 claudex update claude codex   # update specific agents only
 claudex self-update           # update claudex itself in place
 claudex self-update --check   # only check whether a newer claudex exists
+claudex widget start          # launch the desktop widget (bar feature)
+claudex widget stop           # stop the desktop widget
+claudex widget restart        # restart the desktop widget
+claudex widget status         # is the desktop widget running?
 claudex --help        # list available commands
 claudex --version     # print the version
 ```
@@ -319,7 +326,8 @@ Common tasks are available through the `Makefile`:
 | --- | --- |
 | `make build` | Build the debug binary |
 | `make release` | Build the optimized release binary |
-| `make bar` | Build the claudex-bar desktop widget (release, `--features bar`) |
+| `make bar` | Build claudex with widget support (release, `--features bar`) |
+| `make install-bar` | Install claudex with widget support to `~/.cargo/bin` |
 | `make test` | Run the test suite |
 | `make fmt` | Format the code with rustfmt |
 | `make lint` | Run clippy with warnings denied |

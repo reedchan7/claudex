@@ -116,8 +116,8 @@ fn poll_once(claudex_bin: &PathBuf, skip: &[String]) -> PollEvent {
     }
 }
 
-/// Resolve the claudex CLI: `$CLAUDEX_BIN`, then a sibling of the bar's own
-/// executable, then PATH.
+/// Resolve the claudex CLI the poller spawns for snapshots: `$CLAUDEX_BIN`,
+/// else the running executable itself (the widget lives inside `claudex`).
 pub fn resolve_claudex_bin() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("CLAUDEX_BIN") {
         let path = PathBuf::from(path);
@@ -127,16 +127,7 @@ pub fn resolve_claudex_bin() -> Result<PathBuf, String> {
         return Err(format!("CLAUDEX_BIN={} is not a file", path.display()));
     }
 
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let sibling = dir.join("claudex");
-        if sibling.is_file() {
-            return Ok(sibling);
-        }
-    }
-
-    Ok(PathBuf::from("claudex"))
+    std::env::current_exe().map_err(|e| format!("failed to resolve current executable: {e}"))
 }
 
 #[cfg(test)]

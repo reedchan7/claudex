@@ -13,7 +13,6 @@ mod tray;
 
 use std::time::{Duration, Instant};
 
-use clap::Parser;
 use eframe::egui::{
     self, Align, CentralPanel, Color32, CornerRadius, CursorIcon, Frame, Layout, Margin, RichText,
     Sense, Spinner, Stroke, Ui, Vec2,
@@ -41,19 +40,18 @@ const SIZE_DETAIL: f32 = 13.0;
 const SIZE_FOOTER: f32 = 12.0;
 const BAR_HEIGHT: f32 = 8.0;
 
-/// Desktop widget showing claudex usage
-#[derive(Parser)]
-#[command(name = "claudex-bar", version)]
-struct BarArgs {
+/// Options for the desktop widget, passed from `claudex widget …`.
+#[derive(Debug, Default, Clone, clap::Args)]
+pub struct BarOptions {
     /// Skip one or more providers (repeatable or comma-separated)
     #[arg(long = "skip", value_name = "AGENT", action = clap::ArgAction::Append, value_delimiter = ',')]
-    skip: Vec<String>,
+    pub skip: Vec<String>,
     /// Poll interval in seconds (overrides the saved setting; minimum 60)
     #[arg(long, value_name = "SECS")]
-    interval: Option<u64>,
+    pub interval: Option<u64>,
     /// Start with click-through enabled (window ignores the mouse; toggle via tray menu)
     #[arg(long)]
-    click_through: bool,
+    pub click_through: bool,
 }
 
 /// Text/card colors, selected from the OS appearance (light or dark).
@@ -110,10 +108,8 @@ impl Palette {
     }
 }
 
-pub fn run() -> eframe::Result<()> {
-    let args = BarArgs::parse();
-
-    for name in &args.skip {
+pub fn run(options: BarOptions) -> eframe::Result<()> {
+    for name in &options.skip {
         if Provider::from_skip_name(name).is_none() {
             eprintln!("unknown provider '{name}'");
             std::process::exit(2);
@@ -121,7 +117,7 @@ pub fn run() -> eframe::Result<()> {
     }
 
     let saved = config::load();
-    let interval = args
+    let interval = options
         .interval
         .or(saved.interval_secs)
         .unwrap_or(DEFAULT_INTERVAL_SECS)
@@ -143,21 +139,21 @@ pub fn run() -> eframe::Result<()> {
         .with_transparent(true)
         .with_has_shadow(false)
         .with_window_level(WindowLevel::AlwaysOnBottom)
-        .with_mouse_passthrough(args.click_through);
+        .with_mouse_passthrough(options.click_through);
     if let Some((x, y)) = saved.position() {
         viewport = viewport.with_position([x, y]);
     }
 
-    let options = eframe::NativeOptions {
+    let native_options = eframe::NativeOptions {
         viewport,
         ..Default::default()
     };
 
-    let click_through = args.click_through;
-    let skip = args.skip.clone();
+    let click_through = options.click_through;
+    let skip = options.skip.clone();
     eframe::run_native(
         "claudex-bar",
-        options,
+        native_options,
         Box::new(move |cc| {
             #[cfg(target_os = "macos")]
             macos::hide_dock_icon();
