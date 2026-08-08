@@ -17,16 +17,25 @@ use eframe::egui;
 
 use crate::snapshot::Snapshot;
 
+/// What a poll covers: every provider, or a single one (manual per-provider
+/// refresh from the UI).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PollScope {
+    All,
+    /// Provider id, e.g. "gpt" (see `Provider::skip_name`).
+    One(String),
+}
+
 pub enum PollEvent {
     /// A poll just started — the UI can show a loading indicator.
-    Started,
-    Ok(Snapshot),
+    Started(PollScope),
+    Ok(PollScope, Snapshot),
     Err(String),
 }
 
 pub struct Poller {
     results: Receiver<PollEvent>,
-    refresh: Sender<()>,
+    refresh: Sender<PollScope>,
     interval_secs: Arc<AtomicU64>,
     paused: Arc<AtomicBool>,
 }
@@ -40,34 +49,39 @@ impl Poller {
         ctx: egui::Context,
     ) -> Self {
         let (result_tx, result_rx) = mpsc::channel();
-        let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
+        let (refresh_tx, refresh_rx) = mpsc::channel::<PollScope>();
+        let initial_tx = refresh_tx.clone();
         let interval = Arc::new(AtomicU64::new(interval_secs));
         let interval_shared = Arc::clone(&interval);
         let paused_thread = Arc::clone(&paused);
 
         thread::spawn(move || {
+            // Kick off the first poll immediately.
+            let _ = initial_tx.send(PollScope::All);
             loop {
-                // A wake (manual refresh, interval change, pause/resume
-                // signal) re-checks the flag, so pausing takes effect
-                // immediately even mid-sleep.
-                if !paused_thread.load(Ordering::Relaxed) {
-                    if result_tx.send(PollEvent::Started).is_err() {
-                        return;
-                    }
-                    ctx.request_repaint();
-
-                    let result = poll_once(&claudex_bin, &skip);
-                    if result_tx.send(result).is_err() {
-                        return;
-                    }
-                    ctx.request_repaint();
-                }
-
+                // A wake carries the scope to poll (manual global/per-provider
+                // refresh, interval change, resume); a timeout is a scheduled
+                // full poll. Pausing skips polls until resumed.
                 let wait = Duration::from_secs(interval_shared.load(Ordering::Relaxed));
-                match refresh_rx.recv_timeout(wait) {
-                    Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+                let scope = match refresh_rx.recv_timeout(wait) {
+                    Ok(scope) => scope,
+                    Err(RecvTimeoutError::Timeout) => PollScope::All,
                     Err(RecvTimeoutError::Disconnected) => return,
+                };
+                if paused_thread.load(Ordering::Relaxed) {
+                    continue;
                 }
+
+                if result_tx.send(PollEvent::Started(scope.clone())).is_err() {
+                    return;
+                }
+                ctx.request_repaint();
+
+                let result = poll_once(&claudex_bin, &skip, &scope);
+                if result_tx.send(result).is_err() {
+                    return;
+                }
+                ctx.request_repaint();
             }
         });
 
@@ -80,11 +94,16 @@ impl Poller {
     }
 
     pub fn refresh_now(&self) {
-        let _ = self.refresh.send(());
+        let _ = self.refresh.send(PollScope::All);
+    }
+
+    /// Queue a refresh of one provider by id (e.g. "gpt").
+    pub fn refresh_provider(&self, id: String) {
+        let _ = self.refresh.send(PollScope::One(id));
     }
 
     /// A clonable wake handle for out-of-band triggers (signal handler).
-    pub fn refresher(&self) -> Sender<()> {
+    pub fn refresher(&self) -> Sender<PollScope> {
         self.refresh.clone()
     }
 
@@ -114,11 +133,21 @@ impl Poller {
     }
 }
 
-fn poll_once(claudex_bin: &PathBuf, skip: &[String]) -> PollEvent {
+fn poll_once(claudex_bin: &PathBuf, skip: &[String], scope: &PollScope) -> PollEvent {
     let mut command = Command::new(claudex_bin);
-    command.args(["usage", "--all", "--json"]);
-    for name in skip {
-        command.arg("--skip").arg(name);
+    match scope {
+        PollScope::All => {
+            command.args(["usage", "--all", "--json"]);
+            for name in skip {
+                command.arg("--skip").arg(name);
+            }
+        }
+        PollScope::One(id) => {
+            let Some(argv) = usage_argv(id) else {
+                return PollEvent::Err(format!("unknown provider '{id}'"));
+            };
+            command.args(argv).arg("--json");
+        }
     }
 
     match command.output() {
@@ -132,11 +161,24 @@ fn poll_once(claudex_bin: &PathBuf, skip: &[String]) -> PollEvent {
                 ));
             }
             match serde_json::from_slice::<Snapshot>(&output.stdout) {
-                Ok(snapshot) => PollEvent::Ok(snapshot),
+                Ok(snapshot) => PollEvent::Ok(scope.clone(), snapshot),
                 Err(e) => PollEvent::Err(format!("failed to parse claudex JSON: {e}")),
             }
         }
         Err(e) => PollEvent::Err(format!("failed to run {}: {e}", claudex_bin.display())),
+    }
+}
+
+/// CLI argv for a single provider's JSON usage command.
+fn usage_argv(id: &str) -> Option<Vec<&'static str>> {
+    match id {
+        "claude" => Some(vec!["usage"]),
+        "gpt" => Some(vec!["gpt", "usage"]),
+        "agy" => Some(vec!["agy", "usage"]),
+        "glm" => Some(vec!["glm", "usage"]),
+        "kimi" => Some(vec!["kimi", "usage"]),
+        "grok" => Some(vec!["grok", "usage"]),
+        _ => None,
     }
 }
 
@@ -160,10 +202,21 @@ mod tests {
 
     #[test]
     fn poll_once_reports_missing_binary() {
-        let result = poll_once(&PathBuf::from("/nonexistent/claudex"), &[]);
+        let result = poll_once(&PathBuf::from("/nonexistent/claudex"), &[], &PollScope::All);
         match result {
             PollEvent::Err(e) => assert!(e.contains("failed to run")),
             _ => panic!("expected spawn failure"),
         }
+    }
+
+    #[test]
+    fn usage_argv_maps_every_provider() {
+        assert_eq!(usage_argv("claude"), Some(vec!["usage"]));
+        assert_eq!(usage_argv("gpt"), Some(vec!["gpt", "usage"]));
+        assert_eq!(usage_argv("agy"), Some(vec!["agy", "usage"]));
+        assert_eq!(usage_argv("glm"), Some(vec!["glm", "usage"]));
+        assert_eq!(usage_argv("kimi"), Some(vec!["kimi", "usage"]));
+        assert_eq!(usage_argv("grok"), Some(vec!["grok", "usage"]));
+        assert_eq!(usage_argv("nope"), None);
     }
 }

@@ -185,7 +185,7 @@ pub fn run(options: BarOptions) -> eframe::Result<()> {
 /// so resume refreshes immediately.
 fn spawn_signal_handler(
     paused: &Arc<AtomicBool>,
-    refresher: std::sync::mpsc::Sender<()>,
+    refresher: std::sync::mpsc::Sender<poller::PollScope>,
     ctx: egui::Context,
 ) {
     use signal_hook::consts::{SIGUSR1, SIGUSR2};
@@ -200,7 +200,7 @@ fn spawn_signal_handler(
             let value = signal == SIGUSR1;
             paused.store(value, Ordering::Relaxed);
             crate::commands::widget::set_paused_file(value);
-            let _ = refresher.send(());
+            let _ = refresher.send(poller::PollScope::All);
             ctx.request_repaint();
         }
     });
@@ -260,6 +260,7 @@ struct BarApp {
     interval_input: String,
     interval_error: Option<String>,
     tray_paused: bool,
+    loading_provider: Option<String>,
     last_pos: Option<(f32, f32)>,
     pos_changed_at: Option<Instant>,
     desired_height: f32,
@@ -289,6 +290,7 @@ impl BarApp {
             interval_input: String::new(),
             interval_error: None,
             tray_paused,
+            loading_provider: None,
             last_pos: None,
             pos_changed_at: None,
             desired_height: 0.0,
@@ -341,16 +343,35 @@ impl eframe::App for BarApp {
 
         for event in self.poller.drain() {
             match event {
-                PollEvent::Started => self.loading = true,
-                PollEvent::Ok(snapshot) => {
-                    self.latest = Some(snapshot);
+                PollEvent::Started(scope) => match scope {
+                    poller::PollScope::All => self.loading = true,
+                    poller::PollScope::One(id) => self.loading_provider = Some(id),
+                },
+                PollEvent::Ok(scope, snapshot) => {
+                    match scope {
+                        poller::PollScope::All => {
+                            self.latest = Some(snapshot);
+                            self.loading = false;
+                        }
+                        poller::PollScope::One(_) => {
+                            match &mut self.latest {
+                                Some(latest) => {
+                                    if let Some(update) = snapshot.providers.into_iter().next() {
+                                        merge_provider(latest, update);
+                                    }
+                                }
+                                None => self.latest = Some(snapshot),
+                            }
+                            self.loading_provider = None;
+                        }
+                    }
                     self.last_error = None;
                     self.last_success = Some(Instant::now());
-                    self.loading = false;
                 }
                 PollEvent::Err(e) => {
                     self.last_error = Some(e);
                     self.loading = false;
+                    self.loading_provider = None;
                 }
             }
         }
@@ -457,7 +478,14 @@ impl BarApp {
                     if self.config.mini {
                         mini_provider_ui(ui, palette, provider);
                     } else {
-                        provider_ui(ui, palette, provider, &mut self.config);
+                        provider_ui(
+                            ui,
+                            palette,
+                            provider,
+                            &mut self.config,
+                            &self.poller,
+                            self.loading_provider.as_deref() == Some(provider.id.as_str()),
+                        );
                     }
                 }
             }
@@ -747,7 +775,25 @@ fn max_percent(provider: &ProviderSnapshot) -> Option<f64> {
     }
 }
 
-fn provider_ui(ui: &mut Ui, palette: Palette, provider: &ProviderSnapshot, config: &mut BarConfig) {
+/// Replace a provider entry in the snapshot by id (or append if absent) —
+/// folds a single-provider refresh into the last full snapshot.
+fn merge_provider(snapshot: &mut Snapshot, update: ProviderSnapshot) {
+    snapshot.fetched_at = chrono::Utc::now();
+    if let Some(existing) = snapshot.providers.iter_mut().find(|p| p.id == update.id) {
+        *existing = update;
+    } else {
+        snapshot.providers.push(update);
+    }
+}
+
+fn provider_ui(
+    ui: &mut Ui,
+    palette: Palette,
+    provider: &ProviderSnapshot,
+    config: &mut BarConfig,
+    poller: &Poller,
+    loading_this: bool,
+) {
     let (r, g, b) = provider.accent;
     let accent = Color32::from_rgb(r, g, b);
     let collapsed = config.collapsed.iter().any(|id| id == &provider.id);
@@ -757,13 +803,27 @@ fn provider_ui(ui: &mut Ui, palette: Palette, provider: &ProviderSnapshot, confi
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::symmetric(8, 8))
         .show(ui, |ui| {
-            if provider_header(ui, palette, provider, collapsed, accent) {
-                if collapsed {
-                    config.collapsed.retain(|id| id != &provider.id);
-                } else {
-                    config.collapsed.push(provider.id.clone());
+            match provider_header(
+                ui,
+                palette,
+                provider,
+                collapsed,
+                accent,
+                poller.is_paused(),
+                loading_this,
+            ) {
+                ProviderHeaderAction::ToggleCollapse => {
+                    if collapsed {
+                        config.collapsed.retain(|id| id != &provider.id);
+                    } else {
+                        config.collapsed.push(provider.id.clone());
+                    }
+                    config::save(config);
                 }
-                config::save(config);
+                ProviderHeaderAction::Refresh => {
+                    poller.refresh_provider(provider.id.clone());
+                }
+                ProviderHeaderAction::None => {}
             }
 
             if collapsed {
@@ -805,15 +865,24 @@ fn provider_ui(ui: &mut Ui, palette: Palette, provider: &ProviderSnapshot, confi
         .rect_filled(strip, 2, accent.gamma_multiply(0.85));
 }
 
+enum ProviderHeaderAction {
+    None,
+    ToggleCollapse,
+    Refresh,
+}
+
 /// Collapse toggle row for one provider section: chevron + name, with a
-/// hover highlight so it reads as clickable. Returns true when clicked.
+/// hover highlight so it reads as clickable; a per-provider refresh button
+/// (or spinner while its poll runs) sits on the right.
 fn provider_header(
     ui: &mut Ui,
     palette: Palette,
     provider: &ProviderSnapshot,
     collapsed: bool,
     accent: Color32,
-) -> bool {
+    paused: bool,
+    loading_this: bool,
+) -> ProviderHeaderAction {
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
     let response = response.on_hover_cursor(CursorIcon::PointingHand);
@@ -821,6 +890,7 @@ fn provider_header(
         ui.painter().rect_filled(rect, 6, palette.hover_fill);
     }
 
+    let mut action = ProviderHeaderAction::None;
     let mut row = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(rect.shrink2(Vec2::new(6.0, 0.0)))
@@ -834,17 +904,33 @@ fn provider_header(
             .color(accent)
             .strong(),
     );
-    if collapsed {
-        row.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    row.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if collapsed {
             let (text, color) = match max_percent(provider) {
                 Some(max) => (format!("peak {max:.0}%"), utilization_color(max)),
                 None => ("unavailable".to_string(), palette.warn),
             };
             ui.label(RichText::new(text).size(SIZE_DETAIL).color(color));
-        });
-    }
+        }
+        if loading_this {
+            ui.add(Spinner::new().size(11.0).color(palette.faint));
+        } else if !paused
+            && ui
+                .add(
+                    egui::Button::new(RichText::new("↻").size(13.0).color(palette.faint))
+                        .frame(false),
+                )
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .clicked()
+        {
+            action = ProviderHeaderAction::Refresh;
+        }
+    });
 
-    response.clicked()
+    if response.clicked() {
+        action = ProviderHeaderAction::ToggleCollapse;
+    }
+    action
 }
 
 /// One-line-per-provider compact rendering for mini mode.
@@ -970,5 +1056,26 @@ mod tests {
         };
         let unavailable = ProviderSnapshot::unavailable(Provider::Claude, &status);
         assert_eq!(max_percent(&unavailable), None);
+    }
+
+    #[test]
+    fn merge_provider_replaces_by_id_and_appends_new() {
+        let mut snapshot = Snapshot::new(vec![
+            provider_with_bars(&[10.0]),
+            ProviderSnapshot::ok(Provider::Codex, vec![]),
+        ]);
+        let old_fetched_at = snapshot.fetched_at;
+
+        // Replace the existing entry, keep the other one.
+        merge_provider(&mut snapshot, provider_with_bars(&[95.0]));
+        assert_eq!(snapshot.providers.len(), 2);
+        assert_eq!(max_percent(&snapshot.providers[0]), Some(95.0));
+        assert_eq!(snapshot.providers[1].id, "gpt");
+        assert!(snapshot.fetched_at >= old_fetched_at);
+
+        // Unknown id is appended.
+        merge_provider(&mut snapshot, ProviderSnapshot::ok(Provider::Kimi, vec![]));
+        assert_eq!(snapshot.providers.len(), 3);
+        assert_eq!(snapshot.providers[2].id, "kimi");
     }
 }
