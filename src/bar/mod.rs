@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{
     self, Align, CentralPanel, Color32, CornerRadius, CursorIcon, Frame, Layout, Margin, RichText,
-    Sense, Spinner, Stroke, Ui, Vec2,
+    Sense, Stroke, Ui, Vec2,
 };
 use egui::WindowLevel;
 use egui::viewport::{ViewportBuilder, ViewportCommand};
@@ -69,6 +69,8 @@ struct Palette {
     empty_bar: Color32,
     warn: Color32,
     error: Color32,
+    /// Translucent card-colored veil dimming a section while it refreshes.
+    veil: Color32,
 }
 
 impl Palette {
@@ -91,6 +93,7 @@ impl Palette {
             empty_bar: Color32::from_gray(70),
             warn: Color32::from_rgb(245, 198, 106),
             error: Color32::from_rgb(235, 87, 87),
+            veil: Color32::from_rgba_unmultiplied(22, 22, 27, 120),
         }
     }
 
@@ -106,6 +109,7 @@ impl Palette {
             empty_bar: Color32::from_gray(215),
             warn: Color32::from_rgb(168, 118, 20),
             error: Color32::from_rgb(200, 45, 45),
+            veil: Color32::from_rgba_unmultiplied(250, 250, 252, 150),
         }
     }
 }
@@ -418,6 +422,10 @@ impl eframe::App for BarApp {
         self.track_position(ctx);
         // Keep countdowns and the "updated … ago" footer fresh between polls.
         ctx.request_repaint_after(Duration::from_secs(30));
+        // Drive the spinner animation while any poll is in flight.
+        if self.loading || self.loading_provider.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -476,7 +484,12 @@ impl BarApp {
                         ui.add_space(if self.config.mini { 4.0 } else { 12.0 });
                     }
                     if self.config.mini {
-                        mini_provider_ui(ui, palette, provider);
+                        mini_provider_ui(
+                            ui,
+                            palette,
+                            provider,
+                            self.loading_provider.as_deref() == Some(provider.id.as_str()),
+                        );
                     } else {
                         provider_ui(
                             ui,
@@ -631,7 +644,7 @@ impl BarApp {
                 }
                 if !paused {
                     if self.loading {
-                        ui.add(Spinner::new().size(15.0).color(palette.secondary));
+                        paint_spinner_slot(ui, 20.0, palette.secondary);
                     } else if icon_button(ui, "↻", palette).clicked() {
                         self.poller.refresh_now();
                         self.loading = true;
@@ -697,6 +710,42 @@ fn paint_chevron_at(painter: &egui::Painter, center: egui::Pos2, expanded: bool,
     let stroke = Stroke::new(1.6, color);
     painter.line_segment([a, b], stroke);
     painter.line_segment([b, c], stroke);
+}
+
+/// Animation phase 0..1 (≈1.2 revolutions/second) for spinner arcs.
+fn spinner_phase(ctx: &egui::Context) -> f32 {
+    (ctx.input(|i| i.time) * 1.2 % 1.0) as f32
+}
+
+/// A rotating arc spinner: a ~240° arc segment spinning around the center.
+fn paint_spinner(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    color: Color32,
+    phase: f32,
+) {
+    let start = phase * std::f32::consts::TAU;
+    let sweep = std::f32::consts::TAU * 0.66;
+    let points: Vec<egui::Pos2> = (0..=24)
+        .map(|i| {
+            let t = start + sweep * i as f32 / 24.0;
+            egui::pos2(center.x + radius * t.cos(), center.y + radius * t.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, Stroke::new(2.0, color)));
+}
+
+/// Allocate a spinner slot in a horizontal row.
+fn paint_spinner_slot(ui: &mut Ui, size: f32, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    paint_spinner(
+        ui.painter(),
+        rect.center(),
+        size * 0.35,
+        color,
+        spinner_phase(ui.ctx()),
+    );
 }
 
 /// Allocate a chevron slot in a horizontal row (non-interactive; the
@@ -855,8 +904,22 @@ fn provider_ui(
             }
         });
 
-    // Accent strip along the section's left edge.
     let rect = section.response.rect;
+
+    // While this provider refreshes: dim the section and show an accent
+    // spinner at its center — lightweight but unmistakable.
+    if loading_this {
+        ui.painter().rect_filled(rect, 10, palette.veil);
+        paint_spinner(
+            ui.painter(),
+            rect.center(),
+            9.0,
+            accent,
+            spinner_phase(ui.ctx()),
+        );
+    }
+
+    // Accent strip along the section's left edge.
     let strip = egui::Rect::from_min_size(
         rect.min + Vec2::new(2.0, 6.0),
         Vec2::new(3.0, (rect.height() - 12.0).max(0.0)),
@@ -913,7 +976,7 @@ fn provider_header(
             ui.label(RichText::new(text).size(SIZE_DETAIL).color(color));
         }
         if loading_this {
-            ui.add(Spinner::new().size(11.0).color(palette.faint));
+            paint_spinner_slot(ui, 18.0, accent);
         } else if !paused
             && ui
                 .add(
@@ -934,18 +997,27 @@ fn provider_header(
 }
 
 /// One-line-per-provider compact rendering for mini mode.
-fn mini_provider_ui(ui: &mut Ui, palette: Palette, provider: &ProviderSnapshot) {
+fn mini_provider_ui(
+    ui: &mut Ui,
+    palette: Palette,
+    provider: &ProviderSnapshot,
+    loading_this: bool,
+) {
     let (r, g, b) = provider.accent;
+    let accent = Color32::from_rgb(r, g, b);
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-        ui.painter()
-            .circle_filled(rect.center(), 3.5, Color32::from_rgb(r, g, b));
+        ui.painter().circle_filled(rect.center(), 3.5, accent);
         ui.label(
             RichText::new(&provider.label)
                 .size(SIZE_BAR_TEXT)
                 .color(palette.secondary),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if loading_this {
+                paint_spinner_slot(ui, 14.0, accent);
+                return;
+            }
             match &provider.state {
                 ProviderState::Ok { .. } => {
                     let max = max_percent(provider).unwrap_or(0.0);
