@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
@@ -28,6 +28,7 @@ pub struct Poller {
     results: Receiver<PollEvent>,
     refresh: Sender<()>,
     interval_secs: Arc<AtomicU64>,
+    paused: Arc<AtomicBool>,
 }
 
 impl Poller {
@@ -35,25 +36,32 @@ impl Poller {
         claudex_bin: PathBuf,
         skip: Vec<String>,
         interval_secs: u64,
+        paused: Arc<AtomicBool>,
         ctx: egui::Context,
     ) -> Self {
         let (result_tx, result_rx) = mpsc::channel();
         let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
         let interval = Arc::new(AtomicU64::new(interval_secs));
         let interval_shared = Arc::clone(&interval);
+        let paused_thread = Arc::clone(&paused);
 
         thread::spawn(move || {
             loop {
-                if result_tx.send(PollEvent::Started).is_err() {
-                    return;
-                }
-                ctx.request_repaint();
+                // A wake (manual refresh, interval change, pause/resume
+                // signal) re-checks the flag, so pausing takes effect
+                // immediately even mid-sleep.
+                if !paused_thread.load(Ordering::Relaxed) {
+                    if result_tx.send(PollEvent::Started).is_err() {
+                        return;
+                    }
+                    ctx.request_repaint();
 
-                let result = poll_once(&claudex_bin, &skip);
-                if result_tx.send(result).is_err() {
-                    return;
+                    let result = poll_once(&claudex_bin, &skip);
+                    if result_tx.send(result).is_err() {
+                        return;
+                    }
+                    ctx.request_repaint();
                 }
-                ctx.request_repaint();
 
                 let wait = Duration::from_secs(interval_shared.load(Ordering::Relaxed));
                 match refresh_rx.recv_timeout(wait) {
@@ -67,11 +75,27 @@ impl Poller {
             results: result_rx,
             refresh: refresh_tx,
             interval_secs: interval,
+            paused,
         }
     }
 
     pub fn refresh_now(&self) {
         let _ = self.refresh.send(());
+    }
+
+    /// A clonable wake handle for out-of-band triggers (signal handler).
+    pub fn refresher(&self) -> Sender<()> {
+        self.refresh.clone()
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    /// Pause/resume polling; wakes the poller so resume refreshes right away.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
+        self.refresh_now();
     }
 
     pub fn interval_secs(&self) -> u64 {

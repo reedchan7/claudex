@@ -194,11 +194,15 @@ make install-bar                 # install claudex with widget support (Rust req
 claudex widget start             # launch the card in the background
 claudex widget start --skip grok,kimi --interval 300
 claudex widget status            # is it running?
+claudex widget pause             # freeze refreshes (card keeps last data)
+claudex widget resume            # resume refreshes (refreshes immediately)
 claudex widget restart           # stop + start
 claudex widget stop              # stop it
 ```
 
 `start` / `restart` accept `--skip <agent>...`, `--interval <secs>` (overrides the saved interval for that run; minimum 60), and `--click-through`. The widget reports its PID via `~/.claudex/widget.pid` and logs to `~/.claudex/widget.log`. The GUI dependencies (egui + tray-icon) are gated behind the `bar` cargo feature, so plain CLI builds and installs are unchanged; prebuilt releases don't include the widget yet.
+
+`pause` / `resume` talk to the running widget over signals (SIGUSR1/SIGUSR2); the paused state is also persisted in `~/.claudex/widget.paused`, so a widget that was paused stays paused across restarts. In the card itself, the header's ⏸/▶ button and the tray menu's "Pause Updates" checkbox do the same thing without the CLI.
 
 The card has a header row: **▾/▸ Agent Usage** collapses the whole widget to a one-line-per-provider mini view, **↻** refreshes now (a spinner shows while a poll is in flight), and **×** hides the window. Each provider sits in its own tinted section with an accent-colored edge; click a provider's header to collapse/expand just that section (collapsed sections show their peak usage). The footer picks the poll interval: presets 2m / 5m / 10m (default) / 30m / 1h, or Custom… for values like `90s`, `10m`, `1h30m`. Collapse state, mini mode, interval, and window position all persist across restarts. The menu-bar icon offers Refresh Now, Show/Hide Widget, a Click-through toggle (mouse passes through the card), and Quit.
 
@@ -294,6 +298,8 @@ claudex widget start          # launch the desktop widget (bar feature)
 claudex widget stop           # stop the desktop widget
 claudex widget restart        # restart the desktop widget
 claudex widget status         # is the desktop widget running?
+claudex widget pause          # pause usage refreshes
+claudex widget resume         # resume usage refreshes
 claudex --help        # list available commands
 claudex --version     # print the version
 ```

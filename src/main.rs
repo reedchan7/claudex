@@ -101,6 +101,10 @@ enum WidgetCommands {
     },
     /// Show whether the widget is running
     Status,
+    /// Pause usage refreshes (the card stays visible with its last data)
+    Pause,
+    /// Resume usage refreshes (refreshes immediately)
+    Resume,
     /// Run the widget in the foreground (used by `widget start`)
     #[command(hide = true)]
     Run {
@@ -288,6 +292,8 @@ async fn main() {
             WidgetCommands::Stop => commands::widget::stop(),
             WidgetCommands::Restart { opts } => commands::widget::restart(opts),
             WidgetCommands::Status => commands::widget::status(),
+            WidgetCommands::Pause => commands::widget::pause(),
+            WidgetCommands::Resume => commands::widget::resume(),
             WidgetCommands::Run { opts } => {
                 if let Err(e) = commands::widget::run(opts) {
                     eprintln!("✗ {e}");
@@ -672,5 +678,25 @@ mod tests {
             } => assert!(opts.click_through),
             _ => panic!("expected widget run command"),
         }
+    }
+
+    #[cfg(feature = "bar")]
+    #[test]
+    fn widget_pause_and_resume_parse() {
+        let cli = Cli::try_parse_from(["claudex", "widget", "pause"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Widget {
+                command: WidgetCommands::Pause
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["claudex", "widget", "resume"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Widget {
+                command: WidgetCommands::Resume
+            }
+        ));
     }
 }

@@ -11,6 +11,8 @@ mod format;
 mod poller;
 mod tray;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
@@ -159,11 +161,49 @@ pub fn run(options: BarOptions) -> eframe::Result<()> {
             macos::hide_dock_icon();
             install_system_font(&cc.egui_ctx);
 
-            let tray = tray::Tray::new(click_through);
-            let poller = Poller::start(claudex_bin, skip, interval, cc.egui_ctx.clone());
+            // Pause state: seeded from the persisted marker file, shared with
+            // the poller, and updated in-process (tray/header) or from the
+            // CLI via SIGUSR1/SIGUSR2.
+            let paused = Arc::new(AtomicBool::new(crate::commands::widget::is_paused()));
+
+            let tray = tray::Tray::new(click_through, paused.load(Ordering::Relaxed));
+            let poller = Poller::start(
+                claudex_bin,
+                skip,
+                interval,
+                Arc::clone(&paused),
+                cc.egui_ctx.clone(),
+            );
+            spawn_signal_handler(&paused, poller.refresher(), cc.egui_ctx.clone());
             Ok(Box::new(BarApp::new(poller, tray, saved, click_through)))
         }),
     )
+}
+
+/// Apply `claudex widget pause` / `resume` (SIGUSR1/SIGUSR2) to the running
+/// GUI: update the shared flag, persist the marker file, and wake the poller
+/// so resume refreshes immediately.
+fn spawn_signal_handler(
+    paused: &Arc<AtomicBool>,
+    refresher: std::sync::mpsc::Sender<()>,
+    ctx: egui::Context,
+) {
+    use signal_hook::consts::{SIGUSR1, SIGUSR2};
+
+    let paused = Arc::clone(paused);
+    std::thread::spawn(move || {
+        let Ok(mut signals) = signal_hook::iterator::Signals::new([SIGUSR1, SIGUSR2]) else {
+            eprintln!("note: pause/resume signal handling unavailable");
+            return;
+        };
+        for signal in signals.forever() {
+            let value = signal == SIGUSR1;
+            paused.store(value, Ordering::Relaxed);
+            crate::commands::widget::set_paused_file(value);
+            let _ = refresher.send(());
+            ctx.request_repaint();
+        }
+    });
 }
 
 /// Prefer the macOS system font (San Francisco) over egui's bundled fonts so
@@ -219,6 +259,7 @@ struct BarApp {
     interval_editing: bool,
     interval_input: String,
     interval_error: Option<String>,
+    tray_paused: bool,
     last_pos: Option<(f32, f32)>,
     pos_changed_at: Option<Instant>,
     desired_height: f32,
@@ -232,6 +273,7 @@ impl BarApp {
         config: BarConfig,
         click_through: bool,
     ) -> Self {
+        let tray_paused = poller.is_paused();
         Self {
             poller,
             tray,
@@ -246,6 +288,7 @@ impl BarApp {
             interval_editing: false,
             interval_input: String::new(),
             interval_error: None,
+            tray_paused,
             last_pos: None,
             pos_changed_at: None,
             desired_height: 0.0,
@@ -281,6 +324,11 @@ impl BarApp {
         self.hidden = !visible;
         ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
     }
+
+    fn set_paused(&mut self, paused: bool) {
+        crate::commands::widget::set_paused_file(paused);
+        self.poller.set_paused(paused);
+    }
 }
 
 impl eframe::App for BarApp {
@@ -315,6 +363,10 @@ impl eframe::App for BarApp {
         for command in tray_commands {
             match command {
                 tray::TrayCommand::Refresh => self.poller.refresh_now(),
+                tray::TrayCommand::TogglePause => {
+                    let paused = !self.poller.is_paused();
+                    self.set_paused(paused);
+                }
                 tray::TrayCommand::ToggleClickThrough => {
                     self.click_through = !self.click_through;
                     ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(self.click_through));
@@ -331,6 +383,15 @@ impl eframe::App for BarApp {
                     std::process::exit(0);
                 }
             }
+        }
+
+        // Keep the tray check item in sync with out-of-band (signal) changes.
+        let paused = self.poller.is_paused();
+        if paused != self.tray_paused {
+            if let Some(tray) = &self.tray {
+                tray.set_paused(paused);
+            }
+            self.tray_paused = paused;
         }
 
         self.track_position(ctx);
@@ -414,6 +475,13 @@ impl BarApp {
                     .size(SIZE_FOOTER)
                     .color(palette.faint),
             );
+            if self.poller.is_paused() {
+                ui.label(
+                    RichText::new("Paused ·")
+                        .size(SIZE_FOOTER)
+                        .color(palette.warn),
+                );
+            }
             let toggle = ui
                 .add(
                     egui::Button::new(
@@ -529,11 +597,17 @@ impl BarApp {
                 if icon_button(ui, "×", palette).clicked() {
                     self.set_visible(ui.ctx(), false);
                 }
-                if self.loading {
-                    ui.add(Spinner::new().size(15.0).color(palette.secondary));
-                } else if icon_button(ui, "↻", palette).clicked() {
-                    self.poller.refresh_now();
-                    self.loading = true;
+                let paused = self.poller.is_paused();
+                if pause_play_toggle(ui, paused, palette) {
+                    self.set_paused(!paused);
+                }
+                if !paused {
+                    if self.loading {
+                        ui.add(Spinner::new().size(15.0).color(palette.secondary));
+                    } else if icon_button(ui, "↻", palette).clicked() {
+                        self.poller.refresh_now();
+                        self.loading = true;
+                    }
                 }
             });
         });
@@ -614,6 +688,37 @@ fn chevron_toggle(ui: &mut Ui, expanded: bool, palette: Palette) -> bool {
         palette.faint
     };
     paint_chevron_at(ui.painter(), rect.center(), expanded, color);
+    response.clicked()
+}
+
+/// Clickable pause/resume icon for the header: two bars when running, a play
+/// triangle when paused.
+fn pause_play_toggle(ui: &mut Ui, paused: bool, palette: Palette) -> bool {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
+    let response = response.on_hover_cursor(CursorIcon::PointingHand);
+    let color = if response.hovered() {
+        palette.secondary
+    } else {
+        palette.faint
+    };
+    let painter = ui.painter();
+    let center = rect.center();
+    if paused {
+        let points = vec![
+            egui::pos2(center.x - 3.0, center.y - 5.0),
+            egui::pos2(center.x - 3.0, center.y + 5.0),
+            egui::pos2(center.x + 5.0, center.y),
+        ];
+        painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+    } else {
+        for dx in [-3.6_f32, 1.0] {
+            let bar = egui::Rect::from_min_size(
+                egui::pos2(center.x + dx, center.y - 5.0),
+                Vec2::new(2.6, 10.0),
+            );
+            painter.rect_filled(bar, 1, color);
+        }
+    }
     response.clicked()
 }
 

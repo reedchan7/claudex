@@ -18,7 +18,14 @@ path = "src/main.rs"
 [features]
 # `bar` adds the desktop widget (`claudex widget …`, egui floating window +
 # tray icon). CLI-only builds stay free of GUI dependencies.
-bar = ["dep:eframe", "dep:tray-icon", "dep:objc2", "dep:objc2-app-kit", "dep:libc"]
+bar = [
+    "dep:eframe",
+    "dep:tray-icon",
+    "dep:objc2",
+    "dep:objc2-app-kit",
+    "dep:libc",
+    "dep:signal-hook",
+]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
@@ -34,6 +41,7 @@ terminal_size = "0.4"
 self-replace = "1"
 sha2 = "0.11"
 libc = { version = "0.2", optional = true }
+signal-hook = { version = "0.3", optional = true }
 eframe = { version = "0.35", optional = true, default-features = false, features = [
     "glow",
     "default_fonts",

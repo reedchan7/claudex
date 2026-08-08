@@ -1,11 +1,12 @@
-//! Menu-bar (tray) icon for claudex-bar: refresh, show/hide, click-through,
-//! quit.
+//! Menu-bar (tray) icon for claudex-bar: refresh, pause, show/hide,
+//! click-through, quit.
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
 pub enum TrayCommand {
     Refresh,
+    TogglePause,
     ToggleVisible,
     ToggleClickThrough,
     Quit,
@@ -14,6 +15,8 @@ pub enum TrayCommand {
 pub struct Tray {
     _icon: TrayIcon,
     refresh_id: MenuId,
+    pause_item: CheckMenuItem,
+    pause_id: MenuId,
     show_hide_id: MenuId,
     click_through_item: CheckMenuItem,
     click_through_id: MenuId,
@@ -23,8 +26,8 @@ pub struct Tray {
 impl Tray {
     /// Build the tray icon and menu. Returns None (with a stderr note) when
     /// the platform tray is unavailable — the window still works.
-    pub fn new(click_through: bool) -> Option<Self> {
-        match Self::build(click_through) {
+    pub fn new(click_through: bool, paused: bool) -> Option<Self> {
+        match Self::build(click_through, paused) {
             Ok(tray) => Some(tray),
             Err(e) => {
                 eprintln!("note: tray icon unavailable: {e}");
@@ -33,14 +36,16 @@ impl Tray {
         }
     }
 
-    fn build(click_through: bool) -> Result<Self, String> {
+    fn build(click_through: bool, paused: bool) -> Result<Self, String> {
         let refresh_item = MenuItem::new("Refresh Now", true, None);
+        let pause_item = CheckMenuItem::new("Pause Updates", true, paused, None);
         let show_hide_item = MenuItem::new("Show/Hide Widget", true, None);
         let click_through_item = CheckMenuItem::new("Click-through", true, click_through, None);
         let quit_item = MenuItem::new("Quit claudex-bar", true, None);
 
         let menu = Menu::new();
         menu.append(&refresh_item).map_err(|e| e.to_string())?;
+        menu.append(&pause_item).map_err(|e| e.to_string())?;
         menu.append(&show_hide_item).map_err(|e| e.to_string())?;
         menu.append(&click_through_item)
             .map_err(|e| e.to_string())?;
@@ -59,6 +64,8 @@ impl Tray {
         Ok(Self {
             _icon: icon,
             refresh_id: refresh_item.id().clone(),
+            pause_id: pause_item.id().clone(),
+            pause_item,
             show_hide_id: show_hide_item.id().clone(),
             click_through_id: click_through_item.id().clone(),
             click_through_item,
@@ -72,6 +79,8 @@ impl Tray {
             .filter_map(|event| {
                 if event.id == self.refresh_id {
                     Some(TrayCommand::Refresh)
+                } else if event.id == self.pause_id {
+                    Some(TrayCommand::TogglePause)
                 } else if event.id == self.show_hide_id {
                     Some(TrayCommand::ToggleVisible)
                 } else if event.id == self.click_through_id {
@@ -87,6 +96,10 @@ impl Tray {
 
     pub fn set_click_through(&self, enabled: bool) {
         self.click_through_item.set_checked(enabled);
+    }
+
+    pub fn set_paused(&self, paused: bool) {
+        self.pause_item.set_checked(paused);
     }
 }
 

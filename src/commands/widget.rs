@@ -22,6 +22,30 @@ fn log_path() -> Option<PathBuf> {
     state_dir().map(|dir| dir.join("widget.log"))
 }
 
+/// Presence of this file marks the widget's polling as paused; it survives
+/// restarts so a paused widget stays paused.
+fn paused_path() -> Option<PathBuf> {
+    state_dir().map(|dir| dir.join("widget.paused"))
+}
+
+pub fn is_paused() -> bool {
+    paused_path().is_some_and(|path| path.exists())
+}
+
+pub fn set_paused_file(paused: bool) {
+    let Some(path) = paused_path() else {
+        return;
+    };
+    if paused {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, "paused\n");
+    } else {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn pid_alive(pid: i32) -> bool {
     let result = unsafe { libc::kill(pid, 0) };
     result == 0
@@ -154,8 +178,42 @@ pub fn restart(opts: BarOptions) {
 
 pub fn status() {
     match running_pid() {
-        Some(pid) => println!("claudex widget is running (pid {pid})"),
+        Some(pid) => {
+            let paused = if is_paused() { ", updates paused" } else { "" };
+            println!("claudex widget is running (pid {pid}{paused})");
+        }
         None => println!("claudex widget is not running"),
+    }
+}
+
+/// Pause polling in the running widget (SIGUSR1). The card stays visible;
+/// its last data remains on screen.
+pub fn pause() {
+    match running_pid() {
+        None => println!("claudex widget is not running"),
+        Some(pid) => {
+            if is_paused() {
+                println!("claudex widget updates are already paused");
+                return;
+            }
+            unsafe { libc::kill(pid, libc::SIGUSR1) };
+            println!("claudex widget updates paused (pid {pid})");
+        }
+    }
+}
+
+/// Resume polling in the running widget (SIGUSR2); refreshes immediately.
+pub fn resume() {
+    match running_pid() {
+        None => println!("claudex widget is not running"),
+        Some(pid) => {
+            if !is_paused() {
+                println!("claudex widget updates are not paused");
+                return;
+            }
+            unsafe { libc::kill(pid, libc::SIGUSR2) };
+            println!("claudex widget updates resumed (pid {pid})");
+        }
     }
 }
 
