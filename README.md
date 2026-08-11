@@ -12,7 +12,7 @@ A handful of commands set the tone:
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs. (`gemini` and `antigravity` are aliases.)
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
 - **`claudex grok usage`** — your [Grok Build](https://docs.x.ai/build) credit / plan usage from the same billing endpoint the Grok CLI uses: weekly (or current-period) usage by product, plus any on-demand / prepaid balances.
-- **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi Code, Reasonix, Pi, Grok). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated. Pass `--skip <agent>...` to exclude agents.
+- **`claudex update`** — one command to update all your coding agents (Claude, Codex, Antigravity, Kimi Code, Reasonix, Pi, Grok). It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated. Pass `--skip <agent>...` to exclude agents. (`up` is a short alias.)
 - **`claudex widget start`** — a macOS desktop widget that pins a small translucent card to your desktop showing live usage for your agents, refreshed on a timer from `claudex usage --all --json`. Managed entirely from the CLI: `claudex widget start / stop / restart / status`. Comes with a menu-bar icon for refresh / click-through / quit. Requires the `bar` cargo feature — install it with `make install-bar`.
 - **`claudex self-update`** — update claudex itself in place: it downloads the latest release binary for your platform, verifies its checksum, and swaps in the new one (falling back to the install script if anything goes wrong). No Rust toolchain needed.
 
@@ -206,7 +206,7 @@ claudex widget stop              # stop it
 
 The card has a header row: **▾/▸ Agent Usage** collapses the whole widget to a one-line-per-provider mini view, **↻** refreshes everything now (a spinner shows while a poll is in flight), **⏸/▶** pauses/resumes polling, and **×** hides the window. Each provider sits in its own tinted section with an accent-colored edge; click a provider's header to collapse/expand just that section (collapsed sections show their peak usage), and use the **↻** on the right of a provider's header to refresh only that provider (its own spinner shows while it runs). The footer picks the poll interval: presets 2m / 5m / 10m (default) / 30m / 1h, or Custom… for values like `90s`, `10m`, `1h30m`. Collapse state, mini mode, interval, and window position all persist across restarts. The menu-bar icon offers Refresh Now, Pause Updates, Show/Hide Widget, a Click-through toggle (mouse passes through the card), and Quit.
 
-### `claudex update`
+### `claudex update` (`up`)
 
 No credentials needed. claudex checks each agent's installed version (via `<agent> --version`) and compares it to the latest published version from the npm registry, PyPI, or (for Grok) `grok update --check --json`. If an update is available, it runs the appropriate upgrade command:
 
@@ -291,6 +291,7 @@ claudex usage --show-timezone       # include the timezone name in reset times
 claudex gpt usage --show-timezone   # include the timezone name for Codex usage
 claudex agy usage --show-timezone   # include the timezone name for Gemini / Antigravity usage
 claudex update                # update all coding agents
+claudex up                    # short alias for update
 claudex update claude codex   # update specific agents only
 claudex self-update           # update claudex itself in place
 claudex self-update --check   # only check whether a newer claudex exists

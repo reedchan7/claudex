@@ -56,6 +56,7 @@ enum Commands {
         command: GrokCommands,
     },
     /// Update coding agents (claude, codex, agy, kimi, reasonix, pi, grok)
+    #[command(alias = "up")]
     Update {
         /// Only run update commands; skip the post-update version check.
         #[arg(long)]
@@ -497,6 +498,24 @@ mod tests {
                 assert_eq!(agents, ["kimi"]);
             }
             _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn update_alias_up_parses() {
+        let cli = Cli::try_parse_from(["claudex", "up", "claude"]).unwrap();
+
+        match cli.command {
+            Commands::Update {
+                no_post_check,
+                skip,
+                agents,
+            } => {
+                assert!(!no_post_check);
+                assert!(skip.is_empty());
+                assert_eq!(agents, ["claude"]);
+            }
+            _ => panic!("expected update command via up alias"),
         }
     }
 
