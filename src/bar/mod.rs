@@ -34,13 +34,21 @@ const WINDOW_PAD: f32 = 16.0;
 const MIN_INTERVAL_SECS: u64 = 60;
 const DEFAULT_INTERVAL_SECS: u64 = 600;
 
-const SIZE_TITLE: f32 = 17.5;
-const SIZE_PROVIDER: f32 = 16.5;
-const SIZE_BLOCK: f32 = 14.5;
-const SIZE_BAR_TEXT: f32 = 13.5;
-const SIZE_DETAIL: f32 = 13.0;
-const SIZE_FOOTER: f32 = 12.0;
-const BAR_HEIGHT: f32 = 8.0;
+const SIZE_TITLE: f32 = 16.0;
+const SIZE_PROVIDER: f32 = 14.5;
+const SIZE_GROUP: f32 = 11.5;
+const SIZE_METRIC: f32 = 13.0;
+const SIZE_BAR_TEXT: f32 = 13.0;
+const SIZE_CAPTION: f32 = 11.5;
+const SIZE_DETAIL: f32 = 11.5;
+const SIZE_FOOTER: f32 = 11.0;
+const BAR_HEIGHT: f32 = 6.0;
+const PERCENT_COL: f32 = 40.0;
+const GAP_HEADER_BODY: f32 = 8.0;
+const GAP_GROUP: f32 = 16.0;
+const GAP_METRIC: f32 = 12.0;
+const GAP_LABEL_BAR: f32 = 5.0;
+const GAP_BAR_DETAIL: f32 = 3.0;
 
 /// Options for the desktop widget, passed from `claudex widget …`.
 #[derive(Debug, Default, Clone, clap::Args)]
@@ -61,7 +69,6 @@ pub struct BarOptions {
 struct Palette {
     card_fill: Color32,
     card_stroke: Color32,
-    section_fill: Color32,
     hover_fill: Color32,
     primary: Color32,
     secondary: Color32,
@@ -71,6 +78,7 @@ struct Palette {
     error: Color32,
     /// Translucent card-colored veil dimming a section while it refreshes.
     veil: Color32,
+    light: bool,
 }
 
 impl Palette {
@@ -83,34 +91,51 @@ impl Palette {
 
     fn dark() -> Self {
         Self {
-            card_fill: Color32::from_rgba_unmultiplied(22, 22, 27, 236),
-            card_stroke: Color32::from_white_alpha(18),
-            section_fill: Color32::from_white_alpha(9),
-            hover_fill: Color32::from_white_alpha(16),
-            primary: Color32::from_gray(235),
-            secondary: Color32::from_gray(205),
-            faint: Color32::from_gray(150),
-            empty_bar: Color32::from_gray(70),
+            card_fill: Color32::from_rgba_unmultiplied(18, 18, 22, 244),
+            card_stroke: Color32::from_white_alpha(22),
+            hover_fill: Color32::from_white_alpha(18),
+            primary: Color32::from_gray(238),
+            secondary: Color32::from_rgb(196, 194, 190),
+            faint: Color32::from_rgb(148, 146, 142),
+            empty_bar: Color32::from_rgb(48, 48, 54),
             warn: Color32::from_rgb(245, 198, 106),
             error: Color32::from_rgb(235, 87, 87),
-            veil: Color32::from_rgba_unmultiplied(22, 22, 27, 120),
+            veil: Color32::from_rgba_unmultiplied(18, 18, 22, 130),
+            light: false,
         }
     }
 
     fn light() -> Self {
         Self {
-            card_fill: Color32::from_rgba_unmultiplied(250, 250, 252, 238),
-            card_stroke: Color32::from_black_alpha(24),
-            section_fill: Color32::from_black_alpha(7),
-            hover_fill: Color32::from_black_alpha(14),
-            primary: Color32::from_gray(25),
-            secondary: Color32::from_gray(55),
-            faint: Color32::from_gray(105),
-            empty_bar: Color32::from_gray(215),
+            card_fill: Color32::from_rgba_unmultiplied(255, 254, 251, 250),
+            card_stroke: Color32::from_rgba_unmultiplied(48, 40, 32, 22),
+            hover_fill: Color32::from_black_alpha(12),
+            primary: Color32::from_rgb(28, 26, 24),
+            secondary: Color32::from_rgb(72, 66, 60),
+            faint: Color32::from_rgb(120, 114, 108),
+            empty_bar: Color32::from_rgb(224, 220, 214),
             warn: Color32::from_rgb(168, 118, 20),
             error: Color32::from_rgb(200, 45, 45),
-            veil: Color32::from_rgba_unmultiplied(250, 250, 252, 150),
+            veil: Color32::from_rgba_unmultiplied(255, 254, 251, 160),
+            light: true,
         }
+    }
+}
+
+fn mix_rgb(base: Color32, accent: Color32, t: f32) -> Color32 {
+    let mix = |b: u8, a: u8| ((1.0 - t) * f32::from(b) + t * f32::from(a)).round() as u8;
+    Color32::from_rgb(
+        mix(base.r(), accent.r()),
+        mix(base.g(), accent.g()),
+        mix(base.b(), accent.b()),
+    )
+}
+
+fn section_fill(accent: Color32, light: bool) -> Color32 {
+    if light {
+        mix_rgb(Color32::from_rgb(255, 254, 251), accent, 0.16)
+    } else {
+        mix_rgb(Color32::from_rgb(18, 18, 22), accent, 0.20)
     }
 }
 
@@ -848,10 +873,16 @@ fn provider_ui(
     let collapsed = config.collapsed.iter().any(|id| id == &provider.id);
 
     let section = Frame::new()
-        .fill(palette.section_fill)
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::symmetric(8, 8))
+        .fill(section_fill(accent, palette.light))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(Margin {
+            left: 14,
+            right: 12,
+            top: 10,
+            bottom: 12,
+        })
         .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
             match provider_header(
                 ui,
                 palette,
@@ -880,8 +911,16 @@ fn provider_ui(
             }
             match &provider.state {
                 ProviderState::Ok { blocks } => {
-                    for block in blocks {
-                        block_ui(ui, palette, block);
+                    for (index, block) in blocks.iter().enumerate() {
+                        let layout = layout_block(block);
+                        if index == 0 {
+                            ui.add_space(GAP_HEADER_BODY);
+                        } else if layout.heading.is_some() {
+                            ui.add_space(GAP_GROUP);
+                        } else {
+                            ui.add_space(GAP_METRIC);
+                        }
+                        block_layout_ui(ui, palette, &layout);
                     }
                 }
                 ProviderState::Unavailable {
@@ -1035,52 +1074,187 @@ fn mini_provider_ui(
     });
 }
 
-fn block_ui(ui: &mut Ui, palette: Palette, block: &crate::snapshot::Block) {
-    if let Some(title) = &block.title {
-        ui.add_space(7.0);
-        ui.label(
-            RichText::new(title)
-                .size(SIZE_BLOCK)
-                .color(palette.secondary),
-        );
-    }
-    for row in &block.rows {
-        match row {
+#[derive(Debug, PartialEq)]
+enum LayoutItem<'a> {
+    Note(&'a str),
+    Metric {
+        label: &'a str,
+        percent: f64,
+        detail: Option<&'a str>,
+        resets_at: Option<&'a str>,
+    },
+}
+
+struct BlockLayout<'a> {
+    heading: Option<&'a str>,
+    items: Vec<LayoutItem<'a>>,
+}
+
+/// Pair "label text + following bar" into a metric; a bare bar uses the
+/// block title as its label (Claude-style). The title is only kept as a
+/// group heading when the metrics have their own names.
+fn layout_block(block: &crate::snapshot::Block) -> BlockLayout<'_> {
+    let title = block.title.as_deref();
+    let mut items = Vec::new();
+    let mut index = 0;
+    let rows = &block.rows;
+    while index < rows.len() {
+        match &rows[index] {
+            Row::Text { text } if matches!(rows.get(index + 1), Some(Row::Bar { .. })) => {
+                let Some(Row::Bar {
+                    percent,
+                    detail,
+                    resets_at,
+                    ..
+                }) = rows.get(index + 1)
+                else {
+                    unreachable!("guarded by matches!");
+                };
+                items.push(LayoutItem::Metric {
+                    label: text,
+                    percent: *percent,
+                    detail: detail.as_deref(),
+                    resets_at: resets_at.as_deref(),
+                });
+                index += 2;
+            }
             Row::Bar {
                 percent,
-                text,
+                detail,
+                resets_at,
+                ..
+            } => {
+                items.push(LayoutItem::Metric {
+                    label: title.unwrap_or(""),
+                    percent: *percent,
+                    detail: detail.as_deref(),
+                    resets_at: resets_at.as_deref(),
+                });
+                index += 1;
+            }
+            Row::Text { text } => {
+                items.push(LayoutItem::Note(text));
+                index += 1;
+            }
+        }
+    }
+    let heading = title.filter(|title| {
+        items.iter().any(|item| match item {
+            LayoutItem::Metric { label, .. } => *label != *title,
+            LayoutItem::Note(_) => true,
+        })
+    });
+    BlockLayout { heading, items }
+}
+
+fn compact_detail(detail: &str) -> String {
+    let rest = ["Refreshes ", "Resets: ", "Resets "]
+        .iter()
+        .find_map(|prefix| detail.strip_prefix(prefix))
+        .unwrap_or(detail);
+    if let Some(idx) = rest.rfind(", ")
+        && rest[idx + 2..].ends_with(" left")
+    {
+        return format!("{} · {}", &rest[..idx], &rest[idx + 2..]);
+    }
+    rest.to_string()
+}
+
+fn percent_color(percent: f64, palette: Palette) -> Color32 {
+    if percent < 0.5 {
+        palette.faint
+    } else {
+        utilization_color(percent)
+    }
+}
+
+fn paint_usage_bar(ui: &mut Ui, percent: f64, palette: Palette) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3, palette.empty_bar);
+    let fill_width = width * (percent as f32 / 100.0).clamp(0.0, 1.0);
+    if fill_width > 1.0 {
+        let fill = egui::Rect::from_min_size(rect.min, Vec2::new(fill_width, BAR_HEIGHT));
+        let radius = ((fill_width / 2.0).min(3.0)) as u8;
+        painter.rect_filled(fill, radius, utilization_color(percent));
+    }
+}
+
+fn metric_ui(
+    ui: &mut Ui,
+    palette: Palette,
+    label: &str,
+    percent: f64,
+    detail: Option<&str>,
+    resets_at: Option<&str>,
+) {
+    let width = ui.available_width();
+    ui.horizontal(|ui| {
+        let label_width = (width - PERCENT_COL - 8.0).max(48.0);
+        ui.allocate_ui_with_layout(
+            Vec2::new(label_width, 18.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(label)
+                            .size(SIZE_METRIC)
+                            .color(palette.primary),
+                    )
+                    .truncate(),
+                );
+            },
+        );
+        ui.allocate_ui_with_layout(
+            Vec2::new(PERCENT_COL, 18.0),
+            Layout::right_to_left(Align::Center),
+            |ui| {
+                ui.label(
+                    RichText::new(format!("{percent:.0}%"))
+                        .size(SIZE_METRIC)
+                        .color(percent_color(percent, palette)),
+                );
+            },
+        );
+    });
+    ui.add_space(GAP_LABEL_BAR);
+    paint_usage_bar(ui, percent, palette);
+    if let Some(detail) = detail {
+        ui.add_space(GAP_BAR_DETAIL);
+        ui.label(
+            RichText::new(compact_detail(&refreshed_detail(detail, resets_at)))
+                .size(SIZE_CAPTION)
+                .color(palette.faint),
+        );
+    }
+}
+
+fn block_layout_ui(ui: &mut Ui, palette: Palette, layout: &BlockLayout<'_>) {
+    if let Some(heading) = layout.heading {
+        ui.label(RichText::new(heading).size(SIZE_GROUP).color(palette.faint));
+        if !layout.items.is_empty() {
+            ui.add_space(8.0);
+        }
+    }
+    for (index, item) in layout.items.iter().enumerate() {
+        if index > 0 {
+            ui.add_space(match item {
+                LayoutItem::Metric { .. } => GAP_METRIC,
+                LayoutItem::Note(_) => 6.0,
+            });
+        }
+        match item {
+            LayoutItem::Note(text) => {
+                ui.label(RichText::new(*text).size(SIZE_CAPTION).color(palette.faint));
+            }
+            LayoutItem::Metric {
+                label,
+                percent,
                 detail,
                 resets_at,
             } => {
-                ui.horizontal(|ui| {
-                    let bar_width = (ui.available_width() - 76.0).max(60.0);
-                    let (rect, _) =
-                        ui.allocate_exact_size(Vec2::new(bar_width, BAR_HEIGHT), Sense::hover());
-                    let painter = ui.painter();
-                    painter.rect_filled(rect, 3, palette.empty_bar);
-                    let fill_width = bar_width * (*percent as f32 / 100.0).clamp(0.0, 1.0);
-                    if fill_width > 1.0 {
-                        let fill =
-                            egui::Rect::from_min_size(rect.min, Vec2::new(fill_width, BAR_HEIGHT));
-                        let radius = ((fill_width / 2.0).min(3.0)) as u8;
-                        painter.rect_filled(fill, radius, utilization_color(*percent));
-                    }
-                    ui.label(
-                        RichText::new(text)
-                            .size(SIZE_BAR_TEXT)
-                            .color(palette.secondary),
-                    );
-                });
-                if let Some(detail) = detail {
-                    ui.label(
-                        RichText::new(refreshed_detail(detail, resets_at.as_deref()))
-                            .size(SIZE_DETAIL)
-                            .color(palette.faint),
-                    );
-                }
-            }
-            Row::Text { text } => {
-                ui.label(RichText::new(text).size(SIZE_BAR_TEXT).color(palette.faint));
+                metric_ui(ui, palette, label, *percent, *detail, *resets_at);
             }
         }
     }
@@ -1107,6 +1281,79 @@ mod tests {
             })
             .collect();
         ProviderSnapshot::ok(Provider::Claude, blocks)
+    }
+
+    #[test]
+    fn layout_block_pairs_label_with_following_bar() {
+        let block = Block::titled(
+            "Gemini Models",
+            vec![
+                Row::text("Weekly Limit"),
+                Row::bar(
+                    11.0,
+                    "11% used",
+                    Some("Refreshes Aug 25 at 10:32am, 6d left".into()),
+                    Some("2099-08-25T02:32:36Z".into()),
+                ),
+                Row::text("Five Hour Limit"),
+                Row::bar(0.0, "0% used", None, None),
+            ],
+        );
+        let layout = layout_block(&block);
+        assert_eq!(layout.heading, Some("Gemini Models"));
+        assert_eq!(
+            layout.items,
+            vec![
+                LayoutItem::Metric {
+                    label: "Weekly Limit",
+                    percent: 11.0,
+                    detail: Some("Refreshes Aug 25 at 10:32am, 6d left"),
+                    resets_at: Some("2099-08-25T02:32:36Z"),
+                },
+                LayoutItem::Metric {
+                    label: "Five Hour Limit",
+                    percent: 0.0,
+                    detail: None,
+                    resets_at: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn layout_block_uses_title_as_label_for_bare_bars() {
+        let block = Block::titled(
+            "Current session (5h)",
+            vec![Row::bar(
+                0.0,
+                "0% used",
+                Some("Resets 2:10pm, 4h 9m left".into()),
+                None,
+            )],
+        );
+        let layout = layout_block(&block);
+        assert_eq!(layout.heading, None);
+        assert_eq!(
+            layout.items,
+            vec![LayoutItem::Metric {
+                label: "Current session (5h)",
+                percent: 0.0,
+                detail: Some("Resets 2:10pm, 4h 9m left"),
+                resets_at: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn compact_detail_drops_prefix_and_uses_dot_separator() {
+        assert_eq!(
+            compact_detail("Refreshes Aug 25 at 10:32am, 6d left"),
+            "Aug 25 at 10:32am · 6d left"
+        );
+        assert_eq!(
+            compact_detail("Resets 2:10pm, 4h 9m left"),
+            "2:10pm · 4h 9m left"
+        );
     }
 
     #[test]

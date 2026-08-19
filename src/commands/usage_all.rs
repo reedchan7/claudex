@@ -13,8 +13,8 @@ const PROVIDER_ORDER: &[Provider] = &[
     Provider::Grok,
 ];
 
-// Widest possible progress-bar line suffix: " 100.00% used".
-const PCT_SUFFIX_WIDTH: usize = 18;
+// Widest possible progress-bar line suffix: " 100% used".
+const PCT_SUFFIX_WIDTH: usize = 10;
 
 // Matches `bar_width()` in provider renderers so the rule lines up with the
 // bars rendered underneath each header.

@@ -38,7 +38,7 @@ impl Provider {
             Provider::Claude => (217, 119, 87),
             Provider::Codex => (16, 163, 127),
             Provider::Antigravity => (66, 133, 244),
-            Provider::Glm => (99, 102, 241),
+            Provider::Glm => (92, 58, 230),
             Provider::Kimi => (37, 190, 191),
             Provider::Grok => (232, 168, 56),
         }

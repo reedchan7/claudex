@@ -7,7 +7,7 @@ use crate::commands::status::{self, Provider};
 
 const FILL_CHAR: char = '█';
 const EMPTY_CHAR: char = '░';
-const MODEL_USAGE_USED_WIDTH: usize = 12;
+const MODEL_USAGE_USED_WIDTH: usize = 9;
 const MODEL_USAGE_GAP_WIDTH: usize = 1;
 
 fn bar_width() -> usize {
@@ -23,7 +23,7 @@ fn terminal_columns() -> usize {
 }
 
 fn format_used_percent(used_percent: f64) -> String {
-    format!("{used_percent:.2}% used")
+    format!("{used_percent:.0}% used")
 }
 
 fn format_remaining_amount(remaining_amount: i64) -> String {
@@ -103,13 +103,30 @@ fn format_reset_time_with_options(resets_at: &str, show_timezone: bool) -> Strin
     format_local(local_dt, Local::now().date_naive(), &tz_name, show_timezone)
 }
 
+fn strip_remaining_suffix(name: &str) -> &str {
+    let stripped = name
+        .strip_suffix(" Remaining")
+        .or_else(|| name.strip_suffix(" remaining"))
+        .unwrap_or(name)
+        .trim_end();
+    if stripped.is_empty() { name } else { stripped }
+}
+
 fn bucket_label(bucket: &QuotaSummaryBucket) -> &str {
     bucket
         .display_name
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .map(strip_remaining_suffix)
+        .filter(|s| !s.is_empty())
         .unwrap_or("Quota")
+}
+
+/// Unused windows return a sliding `resetTime` of now + window length.
+/// Official Antigravity omits that clock; so do we.
+fn quota_window_unstarted(remaining_fraction: Option<f64>) -> bool {
+    remaining_fraction.is_some_and(|fraction| fraction.is_finite() && fraction >= 1.0)
 }
 
 fn should_print_standalone_bucket(bucket: &QuotaSummaryBucket) -> bool {
@@ -127,7 +144,7 @@ fn print_bucket(bucket: &QuotaSummaryBucket, show_timezone: bool) {
     if bucket.disabled.unwrap_or(false) {
         println!("{}", "Disabled".dimmed());
     } else if let Some(remaining_fraction) = bucket.remaining_fraction {
-        let used_percent = used_percent_from_remaining_fraction(remaining_fraction);
+        let used_percent = displayed_used_percent(remaining_fraction);
         let bar = used_progress_bar(used_percent, bar_width());
         println!("{} {}", bar, format_used_percent(used_percent));
     } else if let Some(remaining_amount) = bucket.remaining_amount {
@@ -136,7 +153,9 @@ fn print_bucket(bucket: &QuotaSummaryBucket, show_timezone: bool) {
         println!("{}", "Quota amount was not returned.".dimmed());
     }
 
-    if let Some(reset_time) = bucket.reset_time.as_deref() {
+    if !quota_window_unstarted(bucket.remaining_fraction)
+        && let Some(reset_time) = bucket.reset_time.as_deref()
+    {
         let reset_str = format_reset_time_with_options(reset_time, show_timezone);
         let line = match time_remaining(reset_time) {
             Some(rem) => format!("Refreshes {reset_str}, {rem} left"),
@@ -157,6 +176,10 @@ fn used_percent_from_remaining_fraction(remaining_fraction: f64) -> f64 {
         return 0.0;
     }
     ((1.0 - remaining_fraction).clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0)
+}
+
+fn displayed_used_percent(remaining_fraction: f64) -> f64 {
+    used_percent_from_remaining_fraction(remaining_fraction).round()
 }
 
 fn used_progress_bar_segments(used_percent: f64, width: usize) -> (String, String) {
@@ -245,7 +268,7 @@ fn print_model_usage(quota: &UserQuotaSummaryResponse, show_timezone: bool) {
             println!();
         }
 
-        let used_percent = used_percent_from_remaining_fraction(tu.remaining_fraction);
+        let used_percent = displayed_used_percent(tu.remaining_fraction);
         let bar = used_progress_bar(used_percent, model_bar_width);
         let name = tu.tier.display_name();
         println!("{}", name.bold());
@@ -347,33 +370,42 @@ fn bucket_reset_line(reset_time: &str, show_timezone: bool) -> String {
     }
 }
 
+fn bucket_reset_fields(
+    bucket: &QuotaSummaryBucket,
+    show_timezone: bool,
+) -> (Option<String>, Option<String>) {
+    if quota_window_unstarted(bucket.remaining_fraction) {
+        return (None, None);
+    }
+    let reset_time = bucket.reset_time.clone();
+    let detail = reset_time
+        .as_deref()
+        .map(|reset_time| bucket_reset_line(reset_time, show_timezone));
+    (detail, reset_time)
+}
+
 /// Content rows of `print_bucket` without its leading bold label line.
 fn bucket_content_rows(
     bucket: &QuotaSummaryBucket,
     show_timezone: bool,
 ) -> Vec<crate::snapshot::Row> {
-    let reset_detail = || {
-        bucket
-            .reset_time
-            .as_deref()
-            .map(|reset_time| bucket_reset_line(reset_time, show_timezone))
-    };
+    let (reset_detail, reset_time) = bucket_reset_fields(bucket, show_timezone);
 
     if bucket.disabled.unwrap_or(false) {
         let mut rows = vec![crate::snapshot::Row::text("Disabled")];
-        if let Some(detail) = reset_detail() {
+        if let Some(detail) = reset_detail {
             rows.push(crate::snapshot::Row::text(detail));
         }
         return rows;
     }
 
     if let Some(remaining_fraction) = bucket.remaining_fraction {
-        let used_percent = used_percent_from_remaining_fraction(remaining_fraction);
+        let used_percent = displayed_used_percent(remaining_fraction);
         return vec![crate::snapshot::Row::bar(
             used_percent,
             format_used_percent(used_percent),
-            reset_detail(),
-            bucket.reset_time.clone(),
+            reset_detail,
+            reset_time,
         )];
     }
 
@@ -383,7 +415,7 @@ fn bucket_content_rows(
         }
         None => crate::snapshot::Row::text("Quota amount was not returned."),
     }];
-    if let Some(detail) = reset_detail() {
+    if let Some(detail) = reset_detail {
         rows.push(crate::snapshot::Row::text(detail));
     }
     rows
@@ -400,15 +432,9 @@ fn group_block(
     group: &crate::agy::api::QuotaSummaryGroup,
     show_timezone: bool,
 ) -> crate::snapshot::Block {
+    // Group descriptions repeat the title ("Models within this group: …").
+    // CLI still prints them; the widget snapshot stays a glanceable metric list.
     let mut rows = Vec::new();
-    if let Some(description) = group
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        rows.push(crate::snapshot::Row::text(description));
-    }
     for bucket in &group.buckets {
         rows.extend(bucket_rows(bucket, show_timezone));
     }
@@ -431,7 +457,7 @@ fn model_usage_block(
 
     let mut rows = Vec::new();
     for tu in &tiers {
-        let used_percent = used_percent_from_remaining_fraction(tu.remaining_fraction);
+        let used_percent = displayed_used_percent(tu.remaining_fraction);
         rows.push(crate::snapshot::Row::text(tu.tier.display_name()));
         rows.push(crate::snapshot::Row::bar(
             used_percent,
@@ -535,8 +561,15 @@ mod tests {
 
     #[test]
     fn test_format_used_percent() {
-        assert_eq!(format_used_percent(7.92064), "7.92% used");
-        assert_eq!(format_used_percent(100.0), "100.00% used");
+        assert_eq!(format_used_percent(7.92064), "8% used");
+        assert_eq!(format_used_percent(100.0), "100% used");
+    }
+
+    #[test]
+    fn test_displayed_used_percent_rounds_to_integer() {
+        assert_eq!(displayed_used_percent(0.8885475), 11.0);
+        assert_eq!(displayed_used_percent(0.9207936), 8.0);
+        assert_eq!(displayed_used_percent(1.0), 0.0);
     }
 
     #[test]
@@ -561,6 +594,30 @@ mod tests {
         };
 
         assert_eq!(bucket_label(&bucket), "Weekly Limit");
+    }
+
+    #[test]
+    fn test_bucket_label_strips_official_remaining_suffix() {
+        let mut bucket = QuotaSummaryBucket {
+            model_id: None,
+            display_name: Some("Weekly Limit Remaining".to_string()),
+            remaining_fraction: Some(0.5),
+            remaining_amount: None,
+            disabled: None,
+            reset_time: None,
+        };
+
+        assert_eq!(bucket_label(&bucket), "Weekly Limit");
+        bucket.display_name = Some("Five Hour Limit Remaining".to_string());
+        assert_eq!(bucket_label(&bucket), "Five Hour Limit");
+    }
+
+    #[test]
+    fn test_quota_window_unstarted_is_full_remaining() {
+        assert!(quota_window_unstarted(Some(1.0)));
+        assert!(quota_window_unstarted(Some(1.2)));
+        assert!(!quota_window_unstarted(Some(0.8885475)));
+        assert!(!quota_window_unstarted(None));
     }
 
     #[test]
@@ -601,8 +658,8 @@ mod tests {
         assert_eq!(reset_row.find("Resets:"), Some(0));
         assert_eq!(pro_row.len(), gpt_row.len());
         assert!(!pro_row.starts_with("Pro"));
-        assert!(pro_row.ends_with("8.00% used"));
-        assert!(gpt_row.ends_with("100.00% used"));
+        assert!(pro_row.ends_with("8% used"));
+        assert!(gpt_row.ends_with("100% used"));
     }
 
     #[test]
@@ -668,8 +725,8 @@ mod tests {
                         "displayName": "Gemini Models",
                         "description": "Models within this group: Gemini Flash, Gemini Pro",
                         "buckets": [
-                            {"displayName": "Weekly Limit", "remainingFraction": 0.9207936, "resetTime": "2099-06-19T08:46:00Z"},
-                            {"displayName": "Five Hour Limit", "remainingFraction": 1, "resetTime": "2099-06-16T08:39:13Z"}
+                            {"displayName": "Weekly Limit Remaining", "remainingFraction": 0.9207936, "resetTime": "2099-06-19T08:46:00Z"},
+                            {"displayName": "Five Hour Limit Remaining", "remainingFraction": 1, "resetTime": "2099-06-16T08:39:13Z"}
                         ]
                     },
                     {
@@ -698,43 +755,31 @@ mod tests {
         assert_eq!(blocks[0].title, None);
         assert_text(&blocks[0].rows[0], "Subscription: Antigravity");
 
-        // Group block: title is the group name, description is the first row,
-        // then each bucket as label row + content rows.
+        // Group block: title is the group name, then each bucket as
+        // label row + content rows. Descriptions stay CLI-only.
         assert_eq!(blocks[1].title.as_deref(), Some("Gemini Models"));
         let gemini = &blocks[1].rows;
-        assert_eq!(gemini.len(), 5);
-        assert_text(
-            &gemini[0],
-            "Models within this group: Gemini Flash, Gemini Pro",
-        );
-        assert_text(&gemini[1], "Weekly Limit");
-        assert_bar(
-            &gemini[2],
-            7.92064,
-            "7.92% used",
-            Some("2099-06-19T08:46:00Z"),
-        );
-        assert!(bar_detail(&gemini[2]).unwrap().starts_with("Refreshes "));
-        assert_text(&gemini[3], "Five Hour Limit");
-        assert_bar(&gemini[4], 0.0, "0.00% used", Some("2099-06-16T08:39:13Z"));
+        assert_eq!(gemini.len(), 4);
+        assert_text(&gemini[0], "Weekly Limit");
+        assert_bar(&gemini[1], 8.0, "8% used", Some("2099-06-19T08:46:00Z"));
+        assert!(bar_detail(&gemini[1]).unwrap().starts_with("Refreshes "));
+        assert_text(&gemini[2], "Five Hour Limit");
+        assert_bar(&gemini[3], 0.0, "0% used", None);
+        assert_eq!(bar_detail(&gemini[3]), None);
 
         // Disabled buckets stay text rows, like print_bucket's "Disabled" line.
         assert_eq!(blocks[2].title.as_deref(), Some("Claude and GPT models"));
         let third_party = &blocks[2].rows;
-        assert_eq!(third_party.len(), 5);
-        assert_text(
-            &third_party[0],
-            "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
-        );
-        assert_text(&third_party[1], "Weekly Limit");
+        assert_eq!(third_party.len(), 4);
+        assert_text(&third_party[0], "Weekly Limit");
         assert_bar(
-            &third_party[2],
+            &third_party[1],
             34.0,
-            "34.00% used",
+            "34% used",
             Some("2099-06-23T01:30:12Z"),
         );
-        assert_text(&third_party[3], "Five Hour Limit");
-        assert_text(&third_party[4], "Disabled");
+        assert_text(&third_party[2], "Five Hour Limit");
+        assert_text(&third_party[3], "Disabled");
 
         // A standalone bucket becomes its own block titled with its label.
         assert_eq!(blocks[3].title.as_deref(), Some("Weekly Limit"));
@@ -742,7 +787,7 @@ mod tests {
         assert_bar(
             &blocks[3].rows[0],
             50.0,
-            "50.00% used",
+            "50% used",
             Some("2099-06-20T00:00:00Z"),
         );
 
@@ -752,15 +797,10 @@ mod tests {
         let usage = &blocks[4].rows;
         assert_eq!(usage.len(), 4);
         assert_text(&usage[0], "Pro");
-        assert_bar(
-            &usage[1],
-            41.44,
-            "41.44% used",
-            Some("2099-06-16T17:20:00Z"),
-        );
+        assert_bar(&usage[1], 41.0, "41% used", Some("2099-06-16T17:20:00Z"));
         assert!(bar_detail(&usage[1]).unwrap().starts_with("Resets: "));
         assert_text(&usage[2], "Flash");
-        assert_bar(&usage[3], 1.0, "1.00% used", Some("2099-06-16T17:57:00Z"));
+        assert_bar(&usage[3], 1.0, "1% used", Some("2099-06-16T17:57:00Z"));
     }
 
     #[test]
