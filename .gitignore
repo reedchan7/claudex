@@ -25,3 +25,4 @@ docs/superpowers
 .DS_Store
 Thumbs.db
 .codegraph
+.jspace
