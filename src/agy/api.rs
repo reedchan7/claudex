@@ -43,6 +43,7 @@ pub struct QuotaSummaryBucket {
 struct LoadCodeAssistResponse {
     cloudaicompanion_project: Option<String>,
     current_tier: Option<CodeAssistTier>,
+    paid_tier: Option<CodeAssistTier>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,7 @@ struct LoadCodeAssistResponse {
 struct CodeAssistTier {
     id: Option<String>,
     name: Option<String>,
+    description: Option<String>,
 }
 
 struct CodeAssistContext {
@@ -127,21 +129,39 @@ async fn fetch_code_assist_context(
     )
     .await?;
 
+    let subscription = subscription_from_code_assist(&response);
     let project = response
         .cloudaicompanion_project
         .map(|project| project.trim().to_string())
         .filter(|project| !project.is_empty());
-    let subscription = response.current_tier.and_then(|tier| {
-        tier.name
-            .or(tier.id)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    });
 
     Ok(CodeAssistContext {
         project,
         subscription,
     })
+}
+
+fn nonempty_trimmed(value: Option<&String>) -> Option<String> {
+    value
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+}
+
+fn subscription_from_code_assist(response: &LoadCodeAssistResponse) -> Option<String> {
+    response
+        .paid_tier
+        .as_ref()
+        .and_then(|paid| {
+            nonempty_trimmed(paid.description.as_ref())
+                .or_else(|| nonempty_trimmed(paid.name.as_ref()))
+                .or_else(|| nonempty_trimmed(paid.id.as_ref()))
+        })
+        .or_else(|| {
+            response.current_tier.as_ref().and_then(|tier| {
+                nonempty_trimmed(tier.name.as_ref()).or_else(|| nonempty_trimmed(tier.id.as_ref()))
+            })
+        })
 }
 
 async fn post_json<T>(
@@ -323,6 +343,65 @@ mod tests {
                 .as_ref()
                 .and_then(|tier| tier.name.as_deref()),
             Some("Antigravity")
+        );
+    }
+
+    #[test]
+    fn subscription_prefers_paid_tier_google_ai_pro_over_antigravity_product() {
+        let response: LoadCodeAssistResponse = serde_json::from_str(
+            r#"{
+                "currentTier": {
+                    "id": "free-tier",
+                    "name": "Antigravity",
+                    "description": "Gemini-powered code suggestions and chat in multiple IDEs"
+                },
+                "paidTier": {
+                    "id": "g1-pro-tier",
+                    "name": "Google AI Pro",
+                    "description": "Google AI Pro"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            subscription_from_code_assist(&response).as_deref(),
+            Some("Google AI Pro")
+        );
+    }
+
+    #[test]
+    fn subscription_falls_back_to_current_tier_name_without_paid_tier() {
+        let response: LoadCodeAssistResponse = serde_json::from_str(
+            r#"{
+                "currentTier": {
+                    "id": "free-tier",
+                    "name": "Antigravity",
+                    "description": "Gemini-powered code suggestions and chat in multiple IDEs"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            subscription_from_code_assist(&response).as_deref(),
+            Some("Antigravity")
+        );
+    }
+
+    #[test]
+    fn subscription_uses_paid_tier_name_when_description_is_empty() {
+        let response: LoadCodeAssistResponse = serde_json::from_str(
+            r#"{
+                "currentTier": {"id": "free-tier", "name": "Antigravity"},
+                "paidTier": {"id": "g1-ultra-tier", "name": "Google AI Ultra", "description": "  "}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            subscription_from_code_assist(&response).as_deref(),
+            Some("Google AI Ultra")
         );
     }
 
