@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{SecondsFormat, Utc};
 use serde_json::{Map, Value};
 use std::time::Duration;
 
@@ -7,6 +7,8 @@ const DEFAULT_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 #[derive(Debug, Default)]
 pub struct ManagedUsage {
     pub subscription: Option<String>,
+    pub user_id: Option<String>,
+    pub monthly: Option<UsageRow>,
     pub summary: Option<UsageRow>,
     pub limits: Vec<UsageRow>,
 }
@@ -16,7 +18,7 @@ pub struct UsageRow {
     pub label: String,
     pub used: i64,
     pub limit: i64,
-    pub reset_hint: Option<String>,
+    pub reset_at: Option<String>,
 }
 
 pub async fn fetch_usage(access_token: &str) -> Result<ManagedUsage, String> {
@@ -72,6 +74,11 @@ fn parse_managed_usage_payload(payload: &Value) -> ManagedUsage {
     };
 
     let subscription = subscription_label(record);
+    let user_id = record
+        .get("user")
+        .and_then(Value::as_object)
+        .and_then(|user| first_string(user, &["userId", "user_id"]))
+        .map(ToString::to_string);
     let summary = record
         .get("usage")
         .and_then(|usage| to_usage_row(usage, "Weekly limit"));
@@ -98,6 +105,8 @@ fn parse_managed_usage_payload(payload: &Value) -> ManagedUsage {
 
     ManagedUsage {
         subscription,
+        user_id,
+        monthly: None,
         summary,
         limits,
     }
@@ -199,7 +208,7 @@ fn to_usage_row(raw: &Value, default_label: &str) -> Option<UsageRow> {
             .to_string(),
         used: used.unwrap_or(0),
         limit: limit.unwrap_or(0),
-        reset_hint: reset_hint_from(record),
+        reset_at: reset_at_from(record),
     })
 }
 
@@ -249,12 +258,19 @@ fn limit_label(
     format!("Limit #{}", idx + 1)
 }
 
-fn reset_hint_from(record: &Map<String, Value>) -> Option<String> {
-    for key in ["reset_at", "resetAt", "reset_time", "resetTime"] {
+pub(crate) fn reset_at_from(record: &Map<String, Value>) -> Option<String> {
+    for key in [
+        "reset_at",
+        "resetAt",
+        "reset_time",
+        "resetTime",
+        "expireTime",
+        "expire_time",
+    ] {
         if let Some(value) = record.get(key).and_then(Value::as_str)
             && !value.is_empty()
         {
-            return Some(format_reset_time(value));
+            return Some(value.to_string());
         }
     }
 
@@ -262,55 +278,14 @@ fn reset_hint_from(record: &Map<String, Value>) -> Option<String> {
         if let Some(seconds) = to_int(record.get(key))
             && seconds > 0
         {
-            return Some(format!("resets in {}", format_duration(seconds)));
+            return Some(
+                (Utc::now() + chrono::Duration::seconds(seconds))
+                    .to_rfc3339_opts(SecondsFormat::Secs, true),
+            );
         }
     }
 
     None
-}
-
-fn format_reset_time(value: &str) -> String {
-    let Ok(parsed) = DateTime::parse_from_rfc3339(value) else {
-        return format!("resets at {value}");
-    };
-    let seconds = parsed.with_timezone(&Utc).timestamp() - Utc::now().timestamp();
-
-    if seconds <= 0 {
-        "reset".to_string()
-    } else {
-        format!("resets in {}", format_duration(seconds))
-    }
-}
-
-fn format_duration(total_seconds: i64) -> String {
-    if total_seconds <= 0 {
-        return "0s".to_string();
-    }
-
-    let days = total_seconds / 86_400;
-    let hours = (total_seconds % 86_400) / 3_600;
-    let minutes = (total_seconds % 3_600) / 60;
-    let seconds = total_seconds % 60;
-    let mut parts = Vec::new();
-
-    if days > 0 {
-        parts.push(format!("{days}d"));
-    }
-    if hours > 0 {
-        parts.push(format!("{hours}h"));
-    }
-    if minutes > 0 {
-        parts.push(format!("{minutes}m"));
-    }
-    if seconds > 0 && parts.is_empty() {
-        parts.push(format!("{seconds}s"));
-    }
-
-    if parts.is_empty() {
-        "0s".to_string()
-    } else {
-        parts.join(" ")
-    }
 }
 
 fn first_string<'a>(record: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
@@ -339,6 +314,7 @@ fn to_int(value: Option<&Value>) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::DateTime;
 
     #[test]
     fn usage_url_trims_base_url_slash() {
@@ -352,12 +328,12 @@ mod tests {
     fn parses_summary_and_rolling_limit() {
         let payload: Value = serde_json::from_str(
             r#"{
-                "user": { "membership": { "level": "LEVEL_ADVANCED" } },
+                "user": { "userId": "co0js84udu6f887phqfg", "membership": { "level": "LEVEL_ADVANCED" } },
                 "parallel": { "limit": "30" },
                 "usage": {
                     "limit": "100",
                     "remaining": "98",
-                    "resetIn": 604800
+                    "resetTime": "2026-08-21T00:52:31.388956Z"
                 },
                 "limits": [
                     {
@@ -366,7 +342,7 @@ mod tests {
                             "limit": "100",
                             "used": "1",
                             "remaining": "99",
-                            "resetIn": 18000
+                            "resetTime": "2026-08-20T09:52:31.388956Z"
                         }
                     }
                 ]
@@ -377,13 +353,15 @@ mod tests {
         let usage = parse_managed_usage_payload(&payload);
 
         assert_eq!(usage.subscription.as_deref(), Some("Allegro"));
+        assert_eq!(usage.user_id.as_deref(), Some("co0js84udu6f887phqfg"));
+        assert!(usage.monthly.is_none());
         assert_eq!(
             usage.summary,
             Some(UsageRow {
                 label: "Weekly limit".to_string(),
                 used: 2,
                 limit: 100,
-                reset_hint: Some("resets in 7d".to_string()),
+                reset_at: Some("2026-08-21T00:52:31.388956Z".to_string()),
             })
         );
         assert_eq!(
@@ -392,9 +370,22 @@ mod tests {
                 label: "5h limit".to_string(),
                 used: 1,
                 limit: 100,
-                reset_hint: Some("resets in 5h".to_string()),
+                reset_at: Some("2026-08-20T09:52:31.388956Z".to_string()),
             }]
         );
+    }
+
+    #[test]
+    fn reset_in_seconds_becomes_an_absolute_timestamp() {
+        let payload: Value = serde_json::from_str(
+            r#"{ "usage": { "limit": "100", "used": "1", "resetIn": 3600 } }"#,
+        )
+        .unwrap();
+        let usage = parse_managed_usage_payload(&payload);
+        let reset_at = usage.summary.unwrap().reset_at.unwrap();
+        let parsed = DateTime::parse_from_rfc3339(&reset_at).unwrap();
+        let delta = parsed.with_timezone(&Utc).timestamp() - Utc::now().timestamp();
+        assert!((3600 - 2..=3600 + 2).contains(&delta), "delta={delta}");
     }
 
     #[test]
@@ -402,6 +393,8 @@ mod tests {
         let usage = parse_managed_usage_payload(&Value::Null);
 
         assert!(usage.summary.is_none());
+        assert!(usage.monthly.is_none());
+        assert!(usage.user_id.is_none());
         assert!(usage.limits.is_empty());
     }
 
@@ -436,11 +429,5 @@ mod tests {
                 "parallel.limit={limit}"
             );
         }
-    }
-
-    #[test]
-    fn duration_keeps_seconds_only_when_no_larger_unit() {
-        assert_eq!(format_duration(45), "45s");
-        assert_eq!(format_duration(3_900), "1h 5m");
     }
 }

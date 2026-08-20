@@ -8,7 +8,7 @@ A handful of commands set the tone:
 
 - **`claudex usage`** — see your *entire* Claude plan budget at a glance: current session, weekly limits, model-specific limits, and usage credits, all rendered as crisp colored bars in a single command.
 - **`claudex gpt usage`** — the same treatment for your [OpenAI Codex](https://developers.openai.com/codex/cli) / ChatGPT plan: subscription tier, 5-hour session window, weekly window, and any per-model limits. (`codex` remains a supported alias.)
-- **`claudex kimi usage`** — show your Kimi Code plan usage from the same managed usage endpoint Kimi Code uses: weekly budget plus the rolling 5-hour limit.
+- **`claudex kimi usage`** — show your Kimi plan usage: the shared monthly membership pool (Kimi web + Kimi Code), the weekly budget, and the rolling 5-hour limit.
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs. (`gemini` and `antigravity` are aliases.)
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
 - **`claudex grok usage`** — your [Grok Build](https://docs.x.ai/build) credit / plan usage from the same billing endpoint the Grok CLI uses: weekly (or current-period) usage by product, plus any on-demand / prepaid balances.
@@ -19,7 +19,7 @@ A handful of commands set the tone:
 No interactive session, no digging through a web app — just run the command and you're done.
 
 > [!WARNING]
-> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, Google, Moonshot AI / Kimi, Z.ai / 智谱, or xAI. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, Kimi Code, Gemini / Antigravity CLI, and Grok Build already store locally — and, for GLM, the API key that ZCode stores locally (or `GLM_API_KEY`) — and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, `api.kimi.com`, `cloudcode-pa.googleapis.com`, `api.z.ai` / `open.bigmodel.cn`, and `cli-chat-proxy.grok.com`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
+> **Unofficial & unaffiliated.** claudex is a personal, non-commercial project. It is **not** affiliated with, endorsed by, or supported by Anthropic, OpenAI, Google, Moonshot AI / Kimi, Z.ai / 智谱, or xAI. It works by reusing the OAuth tokens that Claude Code, the Codex CLI, Kimi Code, Gemini / Antigravity CLI, and Grok Build already store locally — and, for GLM, the API key that ZCode stores locally (or `GLM_API_KEY`) — and calling **undocumented** endpoints (`api.anthropic.com`, `chatgpt.com`, `api.kimi.com`, `www.kimi.com`, `cloudcode-pa.googleapis.com`, `api.z.ai` / `open.bigmodel.cn`, and `cli-chat-proxy.grok.com`) with matching client behavior. Those endpoints may change or disappear without notice, and this usage may be against the providers' Terms of Service. Use it at your own risk. No warranty — see [LICENSE](LICENSE).
 
 ## Example
 
@@ -69,13 +69,17 @@ Resets Jun 6 at 1:44pm, 7d left
 Kimi Code
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Weekly limit
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0% used
-Used 0 / 100; resets in 6d 23h
-
 5h limit
-█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 1% used
-Used 1 / 100; resets in 4h 45m
+██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 21% used
+Resets 5:52pm, 4h 45m left
+
+Weekly limit
+███████████████████████████████░░░░░░░░░░░░░░░░░░░ 63% used
+Resets Aug 21 at 8:52am, 17h left
+
+Monthly limit
+██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 11% used
+Resets Sep 17 at 8:52am, 27d 9h left
 
 Gemini / Antigravity
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -153,7 +157,9 @@ It reads the access token from `~/.codex/auth.json` (written when you sign in wi
 
 ### `claudex kimi usage` (Kimi Code)
 
-It reads the Kimi Code OAuth access token from `~/.kimi-code/credentials/kimi-code.json` (falling back to the legacy `~/.kimi/credentials/kimi-code.json`), calls `GET https://api.kimi.com/coding/v1/usages` with `Authorization: Bearer <token>`, and renders the weekly budget plus rolling limits returned by Kimi Code. If you can run `kimi usage`, you can run `claudex kimi usage`.
+It reads the Kimi Code OAuth access token from `~/.kimi-code/credentials/kimi-code.json` (falling back to the legacy `~/.kimi/credentials/kimi-code.json`), calls `GET https://api.kimi.com/coding/v1/usages` with `Authorization: Bearer <token>`, and renders the weekly budget plus rolling 5-hour limit returned by Kimi Code.
+
+The shared **monthly** membership pool — the “Total usage” bar on Kimi web Settings → Subscription → My Quota, covering Kimi web and Kimi Code together — is not on that coding endpoint. claudex loads it from `POST https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats` using a Kimi web session: the `KIMI_AUTH_TOKEN` environment variable, or (on macOS) the `kimi-auth` cookie from Chrome, Brave, Edge, Arc, Chromium, or Kimi Desktop. If no web session is available, weekly and 5-hour limits still render.
 
 ### `claudex agy usage` (Gemini / Antigravity)
 
