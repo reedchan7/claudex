@@ -55,7 +55,7 @@ enum Commands {
         #[command(subcommand)]
         command: GrokCommands,
     },
-    /// Update coding agents (claude, codex, agy, kimi, reasonix, pi, grok)
+    /// Update coding agents (claude, codex, agy, kimi, pi, grok; reasonix is opt-in)
     #[command(alias = "up")]
     Update {
         /// Only run update commands; skip the post-update version check.
@@ -64,7 +64,7 @@ enum Commands {
         /// Skip one or more agents (repeatable or comma-separated)
         #[arg(long = "skip", value_name = "AGENT", action = clap::ArgAction::Append, value_delimiter = ',')]
         skip: Vec<String>,
-        /// Specific agent(s) to update. If omitted, checks all.
+        /// Specific agent(s) to update. If omitted, updates the default set (Reasonix is opt-in).
         agents: Vec<String>,
     },
     /// Update claudex itself to the latest release
