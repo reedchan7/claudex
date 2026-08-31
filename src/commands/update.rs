@@ -1,6 +1,8 @@
 use colored::Colorize;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, mpsc};
+use std::thread;
 
 // ponytail: finite confirmations cover normal installer prompts; stream them if an updater asks endlessly.
 const AUTO_CONFIRM_INPUT: &[u8] = b"yes\nyes\nyes\nyes\nyes\n";
@@ -224,45 +226,336 @@ fn parse_pypi_version(json: &str) -> Option<String> {
     (!ver.is_empty()).then(|| ver.to_string())
 }
 
-fn do_update(agent: &Agent) -> bool {
+struct UpdateRun {
+    success: bool,
+    stdout: String,
+    stderr: String,
+    error: Option<String>,
+}
+
+fn spawn_error(err: impl std::fmt::Display) -> UpdateRun {
+    UpdateRun {
+        success: false,
+        stdout: String::new(),
+        stderr: String::new(),
+        error: Some(format!(
+            "  {} failed to run update command: {}",
+            "✗".red(),
+            err
+        )),
+    }
+}
+
+fn exit_error(status: std::process::ExitStatus) -> String {
+    format!(
+        "  {} update command exited with {}",
+        "✗".red(),
+        status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".to_string())
+    )
+}
+
+fn do_update(agent: &Agent, capture: bool) -> UpdateRun {
     let cmd = agent.update_cmd;
-    println!("{}", format!("  Running: {}", cmd.join(" ")).dimmed());
-    let mut child = match Command::new(cmd[0])
-        .args(&cmd[1..])
-        .stdin(Stdio::piped())
-        .spawn()
-    {
+    let mut command = Command::new(cmd[0]);
+    command.args(&cmd[1..]).stdin(Stdio::piped());
+    if capture {
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(e) => {
-            eprintln!("  {} failed to run update command: {}", "✗".red(), e);
-            return false;
-        }
+        Err(e) => return spawn_error(e),
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(AUTO_CONFIRM_INPUT);
     }
-    let status = child.wait();
-    match status {
-        Ok(s) if s.success() => true,
-        Ok(s) => {
-            eprintln!(
-                "  {} update command exited with {}",
-                "✗".red(),
-                s.code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "signal".to_string())
-            );
-            false
+    if capture {
+        match child.wait_with_output() {
+            Ok(output) => UpdateRun {
+                success: output.status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                error: (!output.status.success()).then(|| exit_error(output.status)),
+            },
+            Err(e) => spawn_error(e),
         }
-        Err(e) => {
-            eprintln!("  {} failed to run update command: {}", "✗".red(), e);
-            false
+    } else {
+        match child.wait() {
+            Ok(s) if s.success() => UpdateRun {
+                success: true,
+                stdout: String::new(),
+                stderr: String::new(),
+                error: None,
+            },
+            Ok(s) => UpdateRun {
+                success: false,
+                stdout: String::new(),
+                stderr: String::new(),
+                error: Some(exit_error(s)),
+            },
+            Err(e) => spawn_error(e),
         }
     }
 }
 
 fn update_confirmed(current: Option<&str>, expected: Option<&str>, post_check: bool) -> bool {
     !post_check || expected.map_or(current.is_some(), |expected| current == Some(expected))
+}
+
+#[derive(Clone, Copy)]
+enum AgentKind {
+    Updated,
+    Skipped,
+    Failed,
+    NotInstalled,
+}
+
+struct AgentOutcome {
+    kind: AgentKind,
+    output: String,
+}
+
+#[derive(Default)]
+struct Counts {
+    updated: u32,
+    skipped: u32,
+    failed: u32,
+    not_installed: u32,
+}
+
+impl Counts {
+    fn add(&mut self, kind: AgentKind) {
+        match kind {
+            AgentKind::Updated => self.updated += 1,
+            AgentKind::Skipped => self.skipped += 1,
+            AgentKind::Failed => self.failed += 1,
+            AgentKind::NotInstalled => self.not_installed += 1,
+        }
+    }
+}
+
+struct Emitter {
+    live: bool,
+    output: String,
+}
+
+impl Emitter {
+    fn new(live: bool) -> Self {
+        Self {
+            live,
+            output: String::new(),
+        }
+    }
+
+    fn line(&mut self, s: &str) {
+        if self.live {
+            println!("{s}");
+        } else {
+            self.output.push_str(s);
+            self.output.push('\n');
+        }
+    }
+
+    fn err(&mut self, s: &str) {
+        if self.live {
+            eprintln!("{s}");
+        } else {
+            self.output.push_str(s);
+            self.output.push('\n');
+        }
+    }
+
+    fn raw(&mut self, s: &str) {
+        if self.live || s.is_empty() {
+            return;
+        }
+        self.output.push_str(s);
+        if !s.ends_with('\n') {
+            self.output.push('\n');
+        }
+    }
+
+    fn finish(self, kind: AgentKind) -> AgentOutcome {
+        AgentOutcome {
+            kind,
+            output: self.output,
+        }
+    }
+}
+
+fn apply_update(
+    agent: &Agent,
+    expected: Option<&str>,
+    post_check: bool,
+    emit: &mut Emitter,
+) -> AgentKind {
+    emit.line(&format!(
+        "{}",
+        format!("  Running: {}", agent.update_cmd.join(" ")).dimmed()
+    ));
+    let run = do_update(agent, !emit.live);
+    emit.raw(&run.stdout);
+    emit.raw(&run.stderr);
+    if let Some(msg) = &run.error {
+        emit.err(msg);
+    }
+    if !run.success {
+        return AgentKind::Failed;
+    }
+    if !post_check {
+        return AgentKind::Updated;
+    }
+    let current = get_installed_version(agent);
+    if update_confirmed(current.as_deref(), expected, post_check) {
+        if expected.is_some() {
+            emit.line(&format!(
+                "  {} now {}",
+                "✓".green(),
+                current.unwrap().cyan()
+            ));
+        } else {
+            emit.line(&format!(
+                "  {} current {}",
+                "✓".green(),
+                current.unwrap().cyan()
+            ));
+        }
+        AgentKind::Updated
+    } else if expected.is_some() {
+        emit.err(&format!(
+            "  {} current {} after update (expected {})",
+            "✗".red(),
+            current.as_deref().unwrap_or("unknown").yellow(),
+            expected.unwrap().green()
+        ));
+        AgentKind::Failed
+    } else {
+        emit.err(&format!(
+            "  {} could not detect version after update",
+            "✗".red()
+        ));
+        AgentKind::Failed
+    }
+}
+
+fn process_agent(agent: &Agent, post_check: bool, live: bool) -> AgentOutcome {
+    let mut emit = Emitter::new(live);
+
+    emit.line("");
+    emit.line(&agent.display.bold().to_string());
+
+    let installed = match get_installed_version(agent) {
+        Some(v) => v,
+        None => {
+            emit.line(&format!("  {} not installed, skipping", "—".dimmed()));
+            return emit.finish(AgentKind::NotInstalled);
+        }
+    };
+
+    let latest = match get_latest_version(agent) {
+        Some(v) => v,
+        None => {
+            emit.line(&format!(
+                "  installed {}  (could not check latest, updating anyway)",
+                installed.cyan()
+            ));
+            let kind = apply_update(agent, None, post_check, &mut emit);
+            return emit.finish(kind);
+        }
+    };
+
+    if installed == latest {
+        emit.line(&format!(
+            "  {} {} already up to date",
+            "✓".green(),
+            installed.cyan()
+        ));
+        return emit.finish(AgentKind::Skipped);
+    }
+
+    emit.line(&format!("  {} → {}", installed.dimmed(), latest.green()));
+    let kind = apply_update(agent, Some(&latest), post_check, &mut emit);
+    emit.finish(kind)
+}
+
+fn resolve_jobs(jobs: Option<u32>, serial: bool, agent_count: usize) -> usize {
+    if serial {
+        1
+    } else {
+        jobs.map(|n| n as usize).unwrap_or(agent_count.max(1))
+    }
+}
+
+/// Run `f` over `items` with at most `jobs` worker threads.
+/// `on_ordered` is invoked on this thread in input order, as soon as the next
+/// prefix is ready — later work that finishes first is held back.
+fn for_each_bounded_ordered<T, R>(
+    items: &[T],
+    jobs: usize,
+    f: impl Fn(&T) -> R + Sync,
+    mut on_ordered: impl FnMut(R),
+) where
+    T: Sync,
+    R: Send,
+{
+    if items.is_empty() {
+        return;
+    }
+    let jobs = jobs.max(1).min(items.len());
+    if jobs == 1 {
+        for item in items {
+            on_ordered(f(item));
+        }
+        return;
+    }
+
+    let f = &f;
+    let next_idx = Mutex::new(0usize);
+    let next_idx = &next_idx;
+    thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel();
+        let n = items.len();
+
+        for _ in 0..jobs {
+            let tx = tx.clone();
+            scope.spawn(move || {
+                loop {
+                    let i = {
+                        let mut guard = next_idx.lock().unwrap();
+                        if *guard >= n {
+                            None
+                        } else {
+                            let i = *guard;
+                            *guard += 1;
+                            Some(i)
+                        }
+                    };
+                    let Some(i) = i else { break };
+                    if tx.send((i, f(&items[i]))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+
+        let mut slots: Vec<Option<R>> = (0..n).map(|_| None).collect();
+        let mut next_print = 0;
+        for (i, result) in rx {
+            slots[i] = Some(result);
+            while next_print < n {
+                match slots[next_print].take() {
+                    Some(value) => {
+                        on_ordered(value);
+                        next_print += 1;
+                    }
+                    None => break,
+                }
+            }
+        }
+    });
 }
 
 fn resolve_agent_name(name: &str) -> Option<&'static Agent> {
@@ -325,7 +618,7 @@ fn select_agents(targets: &[String], skip: &[String]) -> Result<Vec<&'static Age
     Ok(selected)
 }
 
-pub fn run(targets: &[String], skip: &[String], post_check: bool) {
+pub fn run(targets: &[String], skip: &[String], post_check: bool, jobs: Option<u32>, serial: bool) {
     let agents = match select_agents(targets, skip) {
         Ok(agents) => agents,
         Err(e) => {
@@ -334,104 +627,48 @@ pub fn run(targets: &[String], skip: &[String], post_check: bool) {
         }
     };
 
-    let mut updated = 0u32;
-    let mut skipped = 0u32;
-    let mut failed = 0u32;
-    let mut not_installed = 0u32;
+    let jobs = resolve_jobs(jobs, serial, agents.len());
+    let mut counts = Counts::default();
+    let live = jobs <= 1 || agents.len() <= 1;
 
-    for agent in &agents {
-        println!();
-        println!("{}", agent.display.bold());
-
-        let installed = match get_installed_version(agent) {
-            Some(v) => v,
-            None => {
-                println!("  {} not installed, skipping", "—".dimmed());
-                not_installed += 1;
-                continue;
-            }
-        };
-
-        let latest = match get_latest_version(agent) {
-            Some(v) => v,
-            None => {
-                println!(
-                    "  installed {}  (could not check latest, updating anyway)",
-                    installed.cyan()
-                );
-                if do_update(agent) {
-                    if post_check {
-                        let current = get_installed_version(agent);
-                        if update_confirmed(current.as_deref(), None, post_check) {
-                            println!("  {} current {}", "✓".green(), current.unwrap().cyan());
-                            updated += 1;
-                        } else {
-                            eprintln!("  {} could not detect version after update", "✗".red());
-                            failed += 1;
-                        }
-                    } else {
-                        updated += 1;
-                    }
-                } else {
-                    failed += 1;
-                }
-                continue;
-            }
-        };
-
-        if installed == latest {
-            println!("  {} {} already up to date", "✓".green(), installed.cyan());
-            skipped += 1;
-            continue;
+    if live {
+        for agent in &agents {
+            counts.add(process_agent(agent, post_check, true).kind);
         }
-
-        println!("  {} → {}", installed.dimmed(), latest.green());
-
-        if do_update(agent) {
-            if post_check {
-                let current = get_installed_version(agent);
-                if update_confirmed(current.as_deref(), Some(&latest), post_check) {
-                    println!("  {} now {}", "✓".green(), current.unwrap().cyan());
-                    updated += 1;
-                } else {
-                    eprintln!(
-                        "  {} current {} after update (expected {})",
-                        "✗".red(),
-                        current.as_deref().unwrap_or("unknown").yellow(),
-                        latest.green()
-                    );
-                    failed += 1;
-                }
-            } else {
-                updated += 1;
-            }
-        } else {
-            failed += 1;
-        }
+    } else {
+        for_each_bounded_ordered(
+            &agents,
+            jobs,
+            |agent| process_agent(agent, post_check, false),
+            |outcome| {
+                counts.add(outcome.kind);
+                print!("{}", outcome.output);
+            },
+        );
     }
 
     // Summary
     println!();
     let mut parts: Vec<String> = Vec::new();
-    if updated > 0 {
-        parts.push(format!("{} updated", updated).green().to_string());
+    if counts.updated > 0 {
+        parts.push(format!("{} updated", counts.updated).green().to_string());
     }
-    if skipped > 0 {
-        parts.push(format!("{} up to date", skipped).to_string());
+    if counts.skipped > 0 {
+        parts.push(format!("{} up to date", counts.skipped).to_string());
     }
-    if not_installed > 0 {
+    if counts.not_installed > 0 {
         parts.push(
-            format!("{} not installed", not_installed)
+            format!("{} not installed", counts.not_installed)
                 .dimmed()
                 .to_string(),
         );
     }
-    if failed > 0 {
-        parts.push(format!("{} failed", failed).red().to_string());
+    if counts.failed > 0 {
+        parts.push(format!("{} failed", counts.failed).red().to_string());
     }
     println!("Done: {}", parts.join(", "));
 
-    if failed > 0 {
+    if counts.failed > 0 {
         std::process::exit(1);
     }
 }
@@ -647,7 +884,102 @@ mod tests {
             update_cmd: &["sh", "-c", "read answer; test \"$answer\" = yes"],
         };
 
-        assert!(do_update(&agent));
+        assert!(do_update(&agent, false).success);
+    }
+
+    #[test]
+    fn do_update_can_capture_command_output() {
+        let agent = Agent {
+            name: "capturing",
+            display: "Capturing Agent",
+            version_cmd: &["echo", "1.0.0"],
+            latest_cmd: LatestCmd::Npm("unused"),
+            update_cmd: &["sh", "-c", "echo captured-stdout; echo captured-stderr >&2"],
+        };
+
+        let run = do_update(&agent, true);
+        assert!(run.success);
+        assert!(run.stdout.contains("captured-stdout"));
+        assert!(run.stderr.contains("captured-stderr"));
+        assert!(run.error.is_none());
+    }
+
+    #[test]
+    fn resolve_jobs_defaults_to_all_selected_agents() {
+        assert_eq!(resolve_jobs(None, false, 6), 6);
+        assert_eq!(resolve_jobs(None, false, 1), 1);
+    }
+
+    #[test]
+    fn resolve_jobs_serial_is_one() {
+        assert_eq!(resolve_jobs(None, true, 6), 1);
+        assert_eq!(resolve_jobs(Some(4), true, 6), 1);
+    }
+
+    #[test]
+    fn resolve_jobs_honors_explicit_limit() {
+        assert_eq!(resolve_jobs(Some(2), false, 6), 2);
+        assert_eq!(resolve_jobs(Some(99), false, 3), 99);
+    }
+
+    #[test]
+    fn bounded_ordered_emits_in_input_order_even_when_later_work_finishes_first() {
+        let items = [80u64, 10];
+        let mut seen = Vec::new();
+        for_each_bounded_ordered(
+            &items,
+            2,
+            |ms| {
+                thread::sleep(std::time::Duration::from_millis(*ms));
+                *ms
+            },
+            |v| seen.push(v),
+        );
+        assert_eq!(seen, [80, 10]);
+    }
+
+    #[test]
+    fn bounded_ordered_runs_jobs_in_parallel() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let items = [0, 1];
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn({
+            let barrier = barrier.clone();
+            move || {
+                for_each_bounded_ordered(
+                    &items,
+                    2,
+                    |_| {
+                        barrier.wait();
+                    },
+                    |_| {},
+                );
+                done_tx.send(()).unwrap();
+            }
+        });
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("two jobs should meet at the barrier");
+    }
+
+    #[test]
+    fn bounded_ordered_serial_never_overlaps() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let current = AtomicUsize::new(0);
+        let max = AtomicUsize::new(0);
+        for_each_bounded_ordered(
+            &[0, 1, 2],
+            1,
+            |_| {
+                let n = current.fetch_add(1, Ordering::SeqCst) + 1;
+                max.fetch_max(n, Ordering::SeqCst);
+                thread::sleep(std::time::Duration::from_millis(20));
+                current.fetch_sub(1, Ordering::SeqCst);
+            },
+            |_| {},
+        );
+        assert_eq!(max.load(Ordering::SeqCst), 1);
     }
 
     #[test]

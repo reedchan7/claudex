@@ -12,7 +12,7 @@ A handful of commands set the tone:
 - **`claudex agy usage`** — show your Gemini / Antigravity quota groups: Gemini models and Claude/GPT models, with weekly, 5-hour, and any model-level usage returned by the same Google Code Assist quota APIs. (`gemini` and `antigravity` are aliases.)
 - **`claudex glm usage`** — the GLM Coding Plan budget from your [Z.ai](https://z.ai) / [智谱 BigModel](https://open.bigmodel.cn) subscription: subscription tier, 5-hour session, weekly window, and MCP quota. Works for both the overseas (Z.ai) and domestic (BigModel) editions, auto-detected from your ZCode sign-in (override with `--cn` / `--global`).
 - **`claudex grok usage`** — your [Grok Build](https://docs.x.ai/build) credit / plan usage from the same billing endpoint the Grok CLI uses: weekly (or current-period) usage by product, plus any on-demand / prepaid balances.
-- **`claudex update`** — one command to update your coding agents (Claude, Codex, Antigravity, Kimi Code, Pi, Grok). Reasonix is opt-in: pass `reasonix` to update it. It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated. Pass `--skip <agent>...` to exclude agents. (`up` is a short alias.)
+- **`claudex update`** — one command to update your coding agents (Claude, Codex, Antigravity, Kimi Code, Pi, Grok). Reasonix is opt-in: pass `reasonix` to update it. It compares installed vs. latest versions, skips what's already current, and only runs the upgrade for what's actually outdated. Updates run concurrently by default; pass `--jobs N` to cap parallelism or `--serial` to go one at a time. Pass `--skip <agent>...` to exclude agents. (`up` is a short alias.)
 - **`claudex widget start`** — a macOS desktop widget that pins a small translucent card to your desktop showing live usage for your agents, refreshed on a timer from `claudex usage --all --json`. Managed entirely from the CLI: `claudex widget start / stop / restart / status`. Comes with a menu-bar icon for refresh / click-through / quit. Requires the `bar` cargo feature — install it with `make install-bar`.
 - **`claudex self-update`** — update claudex itself in place: it downloads the latest release binary for your platform, verifies its checksum, and swaps in the new one (falling back to the install script if anything goes wrong). No Rust toolchain needed.
 
@@ -230,6 +230,8 @@ pnpm 11 defaults `minimum-release-age` to 24 hours, so a package published today
 
 Agents that aren't installed are silently skipped. A no-args run updates the default set (Claude, Codex, Antigravity, Kimi Code, Pi, Grok) and leaves Reasonix alone — pass `reasonix` to update it. Pass one or more agent names to update only those, or `--skip <agent>...` (repeatable / comma-separated) to exclude agents from the default set.
 
+Updates run concurrently by default — every selected agent at once. Pass `--jobs N` / `-j N` to cap how many run at the same time, or `--serial` (same as `--jobs 1`) to update one agent at a time. Concurrent runs keep each agent's output together and print sections in the original agent order as they complete. Use `--serial` if two updaters would contend for the same package manager (for example updating both Codex and Reasonix via `pnpm add -g`).
+
 ### `claudex self-update`
 
 Updates claudex itself, not the agents above. It asks GitHub for the latest release, and if you're behind it downloads the prebuilt tarball for your platform, **verifies its sha256**, extracts it, and atomically replaces the running binary — no Rust toolchain required. A checksum mismatch aborts loudly; any other hiccup (network, extraction, a read-only install dir) falls back to the canonical `install.sh`. Pass `--check` to only report whether a newer version exists, or `--force` to reinstall the current version. Native self-update covers macOS and Linux (x86_64 / arm64); on Windows it points you at the releases page.
@@ -297,9 +299,11 @@ claudex update reasonix                # update Reasonix (opt-in; not in the def
 claudex usage --show-timezone       # include the timezone name in reset times
 claudex gpt usage --show-timezone   # include the timezone name for Codex usage
 claudex agy usage --show-timezone   # include the timezone name for Gemini / Antigravity usage
-claudex update                # update the default coding agents (skips Reasonix)
+claudex update                # update the default coding agents concurrently (skips Reasonix)
 claudex up                    # short alias for update
 claudex update claude codex   # update specific agents only
+claudex update --jobs 2       # at most two agents at a time
+claudex update --serial       # one agent at a time
 claudex self-update           # update claudex itself in place
 claudex self-update --check   # only check whether a newer claudex exists
 claudex widget start          # launch the desktop widget (bar feature)

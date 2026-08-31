@@ -55,7 +55,7 @@ enum Commands {
         #[command(subcommand)]
         command: GrokCommands,
     },
-    /// Update coding agents (claude, codex, agy, kimi, pi, grok; reasonix is opt-in)
+    /// Update coding agents concurrently (claude, codex, agy, kimi, pi, grok; reasonix is opt-in)
     #[command(alias = "up")]
     Update {
         /// Only run update commands; skip the post-update version check.
@@ -64,6 +64,12 @@ enum Commands {
         /// Skip one or more agents (repeatable or comma-separated)
         #[arg(long = "skip", value_name = "AGENT", action = clap::ArgAction::Append, value_delimiter = ',')]
         skip: Vec<String>,
+        /// Max number of agents to update at once [default: all]
+        #[arg(short = 'j', long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+        jobs: Option<u32>,
+        /// Update agents one at a time
+        #[arg(long, conflicts_with = "jobs")]
+        serial: bool,
         /// Specific agent(s) to update. If omitted, updates the default set (Reasonix is opt-in).
         agents: Vec<String>,
     },
@@ -284,8 +290,10 @@ async fn main() {
         Commands::Update {
             no_post_check,
             skip,
+            jobs,
+            serial,
             agents,
-        } => commands::update::run(&agents, &skip, !no_post_check),
+        } => commands::update::run(&agents, &skip, !no_post_check, jobs, serial),
         Commands::SelfUpdate { check, force } => commands::self_update::run(check, force).await,
         #[cfg(feature = "bar")]
         Commands::Widget { command } => match command {
@@ -491,10 +499,14 @@ mod tests {
             Commands::Update {
                 no_post_check,
                 skip,
+                jobs,
+                serial,
                 agents,
             } => {
                 assert!(no_post_check);
                 assert!(skip.is_empty());
+                assert!(jobs.is_none());
+                assert!(!serial);
                 assert_eq!(agents, ["kimi"]);
             }
             _ => panic!("expected update command"),
@@ -509,14 +521,85 @@ mod tests {
             Commands::Update {
                 no_post_check,
                 skip,
+                jobs,
+                serial,
                 agents,
             } => {
                 assert!(!no_post_check);
                 assert!(skip.is_empty());
+                assert!(jobs.is_none());
+                assert!(!serial);
                 assert_eq!(agents, ["claude"]);
             }
             _ => panic!("expected update command via up alias"),
         }
+    }
+
+    #[test]
+    fn update_parses_jobs() {
+        let cli = Cli::try_parse_from(["claudex", "update", "--jobs", "2", "claude"]).unwrap();
+
+        match cli.command {
+            Commands::Update {
+                jobs,
+                serial,
+                agents,
+                ..
+            } => {
+                assert_eq!(jobs, Some(2));
+                assert!(!serial);
+                assert_eq!(agents, ["claude"]);
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn update_parses_short_jobs() {
+        let cli = Cli::try_parse_from(["claudex", "up", "-j", "3"]).unwrap();
+
+        match cli.command {
+            Commands::Update { jobs, serial, .. } => {
+                assert_eq!(jobs, Some(3));
+                assert!(!serial);
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn update_parses_serial() {
+        let cli = Cli::try_parse_from(["claudex", "update", "--serial"]).unwrap();
+
+        match cli.command {
+            Commands::Update { jobs, serial, .. } => {
+                assert!(jobs.is_none());
+                assert!(serial);
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn update_rejects_jobs_zero() {
+        let err = match Cli::try_parse_from(["claudex", "update", "--jobs", "0"]) {
+            Ok(_) => panic!("expected --jobs 0 to be rejected"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid value '0'") || message.contains("0 is not in"),
+            "unexpected clap error: {message}"
+        );
+    }
+
+    #[test]
+    fn update_jobs_conflicts_with_serial() {
+        let err = match Cli::try_parse_from(["claudex", "update", "--jobs", "2", "--serial"]) {
+            Ok(_) => panic!("expected --jobs and --serial to conflict"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("cannot be used with"));
     }
 
     #[test]
