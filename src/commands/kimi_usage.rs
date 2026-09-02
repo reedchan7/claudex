@@ -101,6 +101,12 @@ fn reset_detail(row: &UsageRow, show_timezone: bool) -> Option<String> {
     })
 }
 
+fn split_caption(row: &UsageRow) -> Option<String> {
+    let kimi = row.kimi_percent?;
+    let code = row.code_percent?;
+    Some(format!("Kimi {kimi}% · Code {code}%"))
+}
+
 fn print_row(row: &UsageRow, show_timezone: bool) {
     let used_percent = used_percent(row);
 
@@ -110,6 +116,10 @@ fn print_row(row: &UsageRow, show_timezone: bool) {
         progress_bar(used_percent, bar_width()),
         used_percent
     );
+
+    if let Some(split) = split_caption(row) {
+        println!("{}", split.dimmed());
+    }
 
     if let Some(detail) = reset_detail(row, show_timezone) {
         println!("{}", detail.dimmed());
@@ -136,13 +146,17 @@ pub async fn run_json(show_timezone: bool) {
 
 fn bar_row(row: &UsageRow, show_timezone: bool) -> crate::snapshot::Row {
     let used_percent = used_percent(row);
+    let text = match split_caption(row) {
+        Some(split) => format!("{used_percent:.0}% used · {split}"),
+        None => format!("{used_percent:.0}% used"),
+    };
+    let detail = match (split_caption(row), reset_detail(row, show_timezone)) {
+        (Some(split), Some(reset)) => Some(format!("{split} · {reset}")),
+        (Some(split), None) => Some(split),
+        (None, reset) => reset,
+    };
 
-    crate::snapshot::Row::bar(
-        used_percent,
-        format!("{used_percent:.0}% used"),
-        reset_detail(row, show_timezone),
-        row.reset_at.clone(),
-    )
+    crate::snapshot::Row::bar(used_percent, text, detail, row.reset_at.clone())
 }
 
 fn usage_rows(usage: &ManagedUsage) -> Vec<&UsageRow> {
@@ -173,6 +187,11 @@ fn build_blocks(usage: &ManagedUsage, show_timezone: bool) -> Vec<crate::snapsho
         blocks.push(crate::snapshot::Block::untitled(vec![
             crate::snapshot::Row::text("Kimi Code usage data is not available for your plan."),
         ]));
+        if let Some(note) = &usage.monthly_note {
+            blocks.push(crate::snapshot::Block::untitled(vec![
+                crate::snapshot::Row::text(note.clone()),
+            ]));
+        }
         return blocks;
     }
 
@@ -180,6 +199,13 @@ fn build_blocks(usage: &ManagedUsage, show_timezone: bool) -> Vec<crate::snapsho
         rows.into_iter()
             .map(|row| usage_row_block(row, show_timezone)),
     );
+
+    if let Some(note) = &usage.monthly_note {
+        blocks.push(crate::snapshot::Block::untitled(vec![
+            crate::snapshot::Row::text(note.clone()),
+        ]));
+    }
+
     blocks
 }
 
@@ -216,7 +242,10 @@ async fn fetch_usage_with_recovery(
         }
         Err(e) => return Err(e),
     };
-    usage.monthly = crate::kimi::web::fetch_monthly_limit(usage.user_id.as_deref()).await;
+    let (monthly, monthly_note) =
+        crate::kimi::web::fetch_monthly_limit(usage.user_id.as_deref()).await;
+    usage.monthly = monthly;
+    usage.monthly_note = monthly_note;
     Ok(usage)
 }
 
@@ -229,6 +258,10 @@ fn print_usage(usage: &ManagedUsage, show_timezone: bool) {
 
     if rows.is_empty() {
         println!("Kimi Code usage data is not available for your plan.");
+        if let Some(note) = &usage.monthly_note {
+            println!();
+            println!("{}", note.dimmed());
+        }
         return;
     }
 
@@ -238,34 +271,38 @@ fn print_usage(usage: &ManagedUsage, show_timezone: bool) {
         }
         print_row(row, show_timezone);
     }
+
+    if let Some(note) = &usage.monthly_note {
+        if !rows.is_empty() {
+            println!();
+        }
+        println!("{}", note.dimmed());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn usage_row(label: &str, used: i64, limit: i64, reset_at: Option<&str>) -> UsageRow {
+        UsageRow {
+            label: label.to_string(),
+            used,
+            limit,
+            reset_at: reset_at.map(str::to_string),
+            kimi_percent: None,
+            code_percent: None,
+        }
+    }
+
     #[test]
     fn percent_is_clamped_to_full_bar() {
-        let row = UsageRow {
-            label: "5h limit".to_string(),
-            used: 120,
-            limit: 100,
-            reset_at: None,
-        };
-
-        assert_eq!(used_percent(&row), 100.0);
+        assert_eq!(used_percent(&usage_row("5h limit", 120, 100, None)), 100.0);
     }
 
     #[test]
     fn percent_is_zero_without_limit() {
-        let row = UsageRow {
-            label: "Weekly limit".to_string(),
-            used: 1,
-            limit: 0,
-            reset_at: None,
-        };
-
-        assert_eq!(used_percent(&row), 0.0);
+        assert_eq!(used_percent(&usage_row("Weekly limit", 1, 0, None)), 0.0);
     }
 
     fn sample_usage() -> ManagedUsage {
@@ -273,23 +310,21 @@ mod tests {
             subscription: Some("Allegro".to_string()),
             user_id: Some("co0js84udu6f887phqfg".to_string()),
             monthly: Some(UsageRow {
-                label: "Monthly limit".to_string(),
-                used: 11,
+                label: "Total usage".to_string(),
+                used: 26,
                 limit: 100,
                 reset_at: Some("2099-09-17T00:52:31Z".to_string()),
+                kimi_percent: Some(2),
+                code_percent: Some(24),
             }),
-            summary: Some(UsageRow {
-                label: "Weekly limit".to_string(),
-                used: 2,
-                limit: 100,
-                reset_at: Some("2099-08-21T00:52:31Z".to_string()),
-            }),
-            limits: vec![UsageRow {
-                label: "5h limit".to_string(),
-                used: 1,
-                limit: 100,
-                reset_at: Some("2099-08-20T09:52:31Z".to_string()),
-            }],
+            summary: Some(usage_row(
+                "Weekly limit",
+                2,
+                100,
+                Some("2099-08-21T00:52:31Z"),
+            )),
+            limits: vec![usage_row("5h limit", 1, 100, Some("2099-08-20T09:52:31Z"))],
+            monthly_note: None,
         }
     }
 
@@ -302,9 +337,12 @@ mod tests {
                 resets_at: got_reset,
             } => {
                 assert_eq!(*got_percent, percent);
-                assert_eq!(text, &format!("{percent:.0}% used"));
+                assert!(
+                    text.starts_with(&format!("{percent:.0}% used")),
+                    "text={text}"
+                );
                 let detail = detail.as_deref().expect("reset detail");
-                assert!(detail.starts_with("Resets "), "detail={detail}");
+                assert!(detail.contains("Resets "), "detail={detail}");
                 assert!(detail.contains(" left"), "detail={detail}");
                 assert!(
                     detail.contains("am") || detail.contains("pm"),
@@ -331,8 +369,47 @@ mod tests {
         assert_reset_bar(&blocks[1].rows[0], 1.0, "2099-08-20T09:52:31Z");
         assert_eq!(blocks[2].title.as_deref(), Some("Weekly limit"));
         assert_reset_bar(&blocks[2].rows[0], 2.0, "2099-08-21T00:52:31Z");
-        assert_eq!(blocks[3].title.as_deref(), Some("Monthly limit"));
-        assert_reset_bar(&blocks[3].rows[0], 11.0, "2099-09-17T00:52:31Z");
+        assert_eq!(blocks[3].title.as_deref(), Some("Total usage"));
+        assert_reset_bar(&blocks[3].rows[0], 26.0, "2099-09-17T00:52:31Z");
+        match &blocks[3].rows[0] {
+            crate::snapshot::Row::Bar { text, detail, .. } => {
+                assert_eq!(text, "26% used · Kimi 2% · Code 24%");
+                assert!(
+                    detail
+                        .as_deref()
+                        .is_some_and(|d| d.starts_with("Kimi 2% · Code 24% · Resets ")),
+                    "detail={detail:?}"
+                );
+            }
+            _ => panic!("expected bar row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_appends_monthly_note_when_web_session_is_missing() {
+        let usage = ManagedUsage {
+            subscription: Some("Allegro".to_string()),
+            summary: Some(usage_row(
+                "Weekly limit",
+                2,
+                100,
+                Some("2099-08-21T00:52:31Z"),
+            )),
+            monthly_note: Some(
+                "Total usage unavailable — browser kimi-auth cookie is expired. Copy Authorization from GetSubscriptionStats into KIMI_AUTH_TOKEN."
+                    .to_string(),
+            ),
+            ..ManagedUsage::default()
+        };
+        let blocks = build_blocks(&usage, false);
+
+        assert_eq!(blocks.last().and_then(|block| block.title.as_deref()), None);
+        match &blocks.last().unwrap().rows[0] {
+            crate::snapshot::Row::Text { text } => {
+                assert!(text.contains("kimi-auth cookie is expired"));
+            }
+            _ => panic!("expected text row"),
+        }
     }
 
     #[test]
@@ -374,12 +451,7 @@ mod tests {
     fn build_blocks_without_reset_omits_detail() {
         let usage = ManagedUsage {
             subscription: None,
-            summary: Some(UsageRow {
-                label: "Weekly limit".to_string(),
-                used: 5,
-                limit: 0,
-                reset_at: None,
-            }),
+            summary: Some(usage_row("Weekly limit", 5, 0, None)),
             limits: Vec::new(),
             ..ManagedUsage::default()
         };

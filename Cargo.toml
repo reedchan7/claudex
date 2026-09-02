@@ -1,6 +1,6 @@
 [package]
 name = "claudex"
-version = "0.7.5"
+version = "0.7.6"
 edition = "2024"
 description = "A CLI that extends the Claude Code CLI with extra commands, starting with `claudex usage` for plan usage limits."
 license = "MIT"
@@ -44,6 +44,8 @@ iana-time-zone = "0.1.65"
 terminal_size = "0.4.4"
 self-replace = "1.5.0"
 sha2 = "0.11.0"
+leveldb-core = "0.1.2"
+leveldb-forensic = "0.1.2"
 libc = { version = "0.2.189", optional = true }
 signal-hook = { version = "0.4.4", optional = true }
 eframe = { version = "0.36.1", optional = true, default-features = false, features = [

@@ -9,6 +9,9 @@ pub struct ManagedUsage {
     pub subscription: Option<String>,
     pub user_id: Option<String>,
     pub monthly: Option<UsageRow>,
+    /// Shown when the shared monthly pool could not be loaded (missing or
+    /// expired Kimi web session). 5h/weekly rows still render.
+    pub monthly_note: Option<String>,
     pub summary: Option<UsageRow>,
     pub limits: Vec<UsageRow>,
 }
@@ -19,6 +22,10 @@ pub struct UsageRow {
     pub used: i64,
     pub limit: i64,
     pub reset_at: Option<String>,
+    /// Kimi web share of Total usage, as an integer percent of the monthly pool.
+    pub kimi_percent: Option<i64>,
+    /// Kimi Code share of Total usage, as an integer percent of the monthly pool.
+    pub code_percent: Option<i64>,
 }
 
 pub async fn fetch_usage(access_token: &str) -> Result<ManagedUsage, String> {
@@ -107,6 +114,7 @@ fn parse_managed_usage_payload(payload: &Value) -> ManagedUsage {
         subscription,
         user_id,
         monthly: None,
+        monthly_note: None,
         summary,
         limits,
     }
@@ -209,6 +217,8 @@ fn to_usage_row(raw: &Value, default_label: &str) -> Option<UsageRow> {
         used: used.unwrap_or(0),
         limit: limit.unwrap_or(0),
         reset_at: reset_at_from(record),
+        kimi_percent: None,
+        code_percent: None,
     })
 }
 
@@ -362,6 +372,8 @@ mod tests {
                 used: 2,
                 limit: 100,
                 reset_at: Some("2026-08-21T00:52:31.388956Z".to_string()),
+                kimi_percent: None,
+                code_percent: None,
             })
         );
         assert_eq!(
@@ -371,6 +383,8 @@ mod tests {
                 used: 1,
                 limit: 100,
                 reset_at: Some("2026-08-20T09:52:31.388956Z".to_string()),
+                kimi_percent: None,
+                code_percent: None,
             }]
         );
     }

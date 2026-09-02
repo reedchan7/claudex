@@ -77,8 +77,9 @@ Weekly limit
 ███████████████████████████████░░░░░░░░░░░░░░░░░░░ 63% used
 Resets Aug 21 at 8:52am, 17h left
 
-Monthly limit
-██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 11% used
+Total usage
+██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 26% used
+Kimi 2% · Code 24%
 Resets Sep 17 at 8:52am, 27d 9h left
 
 Gemini / Antigravity
@@ -159,7 +160,7 @@ It reads the access token from `~/.codex/auth.json` (written when you sign in wi
 
 It reads the Kimi Code OAuth access token from `~/.kimi-code/credentials/kimi-code.json` (falling back to the legacy `~/.kimi/credentials/kimi-code.json`), calls `GET https://api.kimi.com/coding/v1/usages` with `Authorization: Bearer <token>`, and renders the weekly budget plus rolling 5-hour limit returned by Kimi Code.
 
-The shared **monthly** membership pool — the “Total usage” bar on Kimi web Settings → Subscription → My Quota, covering Kimi web and Kimi Code together — is not on that coding endpoint. claudex loads it from `POST https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats` using a Kimi web session: the `KIMI_AUTH_TOKEN` environment variable, or (on macOS) the `kimi-auth` cookie from Chrome, Brave, Edge, Arc, Chromium, or Kimi Desktop. If no web session is available, weekly and 5-hour limits still render.
+The shared **monthly** membership pool — the “Total usage” bar on Kimi web Settings → Subscription → My Quota — is not on that coding endpoint. It is a single credit pool shared by Kimi web (chat / Agent / Work) and Kimi Code. claudex loads it from `POST https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats` using a Kimi web session: the `KIMI_AUTH_TOKEN` environment variable, or (on macOS) the `kimi-auth` cookie from Chrome, Brave, Edge, Arc, Chromium, or Kimi Desktop. When the membership API returns `kimiCodeUsedRatio`, the bar also shows the Kimi vs Code split. The Code CLI token cannot call this RPC (different JWT signing method). On macOS claudex reads the live web session from Chrome/Brave/Edge/Arc Local Storage (`access_token` / `refresh_token` under `https://www.kimi.com`); if the short-lived access token has expired it refreshes it with the stored refresh token. The `kimi-auth` cookie is still tried, but Kimi often leaves that cookie stale. `KIMI_AUTH_TOKEN` remains an override. Weekly and 5-hour limits still render if the web session cannot be loaded.
 
 ### `claudex agy usage` (Gemini / Antigravity)
 
