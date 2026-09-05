@@ -2,7 +2,9 @@ use chrono::{DateTime, Local, NaiveDate, Timelike};
 use colored::Colorize;
 use terminal_size::{Width, terminal_size};
 
-use crate::codex::api::{Credits, UsageResponse, WindowSnapshot};
+use crate::codex::api::{
+    Credits, RateLimitResetCredit, RateLimitResetCreditsDetails, UsageResponse, WindowSnapshot,
+};
 use crate::commands::status::{self, Provider};
 
 const FILL_CHAR: char = '\u{2588}';
@@ -185,6 +187,87 @@ fn window_block(
     crate::snapshot::Block::titled(title, vec![window_bar_row(window, show_timezone)])
 }
 
+fn format_expiry_line(expires_at: i64, show_timezone: bool) -> String {
+    let when = format_reset_from_unix_with_options(expires_at, show_timezone);
+    if when.is_empty() {
+        return String::new();
+    }
+    match time_remaining_from_unix(expires_at) {
+        Some(rem) => format!("Expires {when}, {rem} left"),
+        None => format!("Expires {when}"),
+    }
+}
+
+fn reset_credits_count(
+    usage: &UsageResponse,
+    details: Option<&RateLimitResetCreditsDetails>,
+) -> Option<i64> {
+    usage
+        .rate_limit_reset_credits
+        .as_ref()
+        .map(|summary| summary.available_count)
+        .or_else(|| details.map(|details| details.available_count))
+}
+
+fn available_reset_credits(
+    details: Option<&RateLimitResetCreditsDetails>,
+) -> Vec<&RateLimitResetCredit> {
+    let mut credits: Vec<&RateLimitResetCredit> = details
+        .map(|details| {
+            details
+                .credits
+                .iter()
+                .filter(|credit| credit.is_available())
+                .collect()
+        })
+        .unwrap_or_default();
+    credits.sort_by_key(|credit| credit.expires_at.unwrap_or(i64::MAX));
+    credits
+}
+
+fn reset_credits_block(
+    usage: &UsageResponse,
+    details: Option<&RateLimitResetCreditsDetails>,
+    show_timezone: bool,
+) -> Option<crate::snapshot::Block> {
+    let count = reset_credits_count(usage, details)?;
+    let mut rows = vec![crate::snapshot::Row::text(format!("{count} available"))];
+    if count > 0 {
+        for credit in available_reset_credits(details) {
+            if let Some(expires_at) = credit.expires_at {
+                let line = format_expiry_line(expires_at, show_timezone);
+                if !line.is_empty() {
+                    rows.push(crate::snapshot::Row::text(line));
+                }
+            }
+        }
+    }
+    Some(crate::snapshot::Block::titled("Reset credits", rows))
+}
+
+fn print_reset_credits(
+    usage: &UsageResponse,
+    details: Option<&RateLimitResetCreditsDetails>,
+    show_timezone: bool,
+) {
+    let Some(block) = reset_credits_block(usage, details, show_timezone) else {
+        return;
+    };
+    println!();
+    if let Some(title) = &block.title {
+        println!("{}", title.bold());
+    }
+    for row in &block.rows {
+        match row {
+            crate::snapshot::Row::Text { text } if text.starts_with("Expires ") => {
+                println!("{}", text.dimmed());
+            }
+            crate::snapshot::Row::Text { text } => println!("{text}"),
+            _ => {}
+        }
+    }
+}
+
 fn credits_block(credits: &Credits) -> Option<crate::snapshot::Block> {
     if credits.unlimited.unwrap_or(false) {
         return Some(crate::snapshot::Block::untitled(vec![
@@ -206,7 +289,11 @@ fn credits_block(credits: &Credits) -> Option<crate::snapshot::Block> {
     None
 }
 
-fn build_blocks(usage: &UsageResponse, show_timezone: bool) -> Vec<crate::snapshot::Block> {
+fn build_blocks(
+    usage: &UsageResponse,
+    details: Option<&RateLimitResetCreditsDetails>,
+    show_timezone: bool,
+) -> Vec<crate::snapshot::Block> {
     let has_limits = usage.rate_limit.is_some()
         || usage
             .additional_rate_limits
@@ -255,6 +342,10 @@ fn build_blocks(usage: &UsageResponse, show_timezone: bool) -> Vec<crate::snapsh
         }
     }
 
+    if let Some(block) = reset_credits_block(usage, details, show_timezone) {
+        blocks.push(block);
+    }
+
     if let Some(credits) = &usage.credits
         && let Some(block) = credits_block(credits)
     {
@@ -267,18 +358,18 @@ fn build_blocks(usage: &UsageResponse, show_timezone: bool) -> Vec<crate::snapsh
 pub async fn snapshot(show_timezone: bool) -> Result<crate::snapshot::ProviderSnapshot, String> {
     let creds = crate::codex::auth::read_credentials()?;
 
-    let usage = crate::codex::api::fetch_usage(&creds).await?;
+    let (usage, details) = crate::codex::api::fetch_usage_bundle(&creds).await?;
 
     Ok(crate::snapshot::ProviderSnapshot::ok(
         Provider::Codex,
-        build_blocks(&usage, show_timezone),
+        build_blocks(&usage, details.as_ref(), show_timezone),
     ))
 }
 
 pub async fn render(show_timezone: bool) -> Result<(), String> {
     let creds = crate::codex::auth::read_credentials()?;
 
-    let usage = crate::codex::api::fetch_usage(&creds).await?;
+    let (usage, details) = crate::codex::api::fetch_usage_bundle(&creds).await?;
 
     let has_limits = usage.rate_limit.is_some()
         || usage
@@ -328,6 +419,8 @@ pub async fn render(show_timezone: bool) -> Result<(), String> {
             }
         }
     }
+
+    print_reset_credits(&usage, details.as_ref(), show_timezone);
 
     if let Some(credits) = &usage.credits {
         let unlimited = credits.unlimited.unwrap_or(false);
@@ -444,7 +537,7 @@ mod tests {
                 "credits": {"has_credits": false, "unlimited": false, "balance": "0"}
             }"#,
         );
-        let blocks = build_blocks(&usage, false);
+        let blocks = build_blocks(&usage, None, false);
 
         assert_eq!(blocks.len(), 5);
         assert_eq!(blocks[0].title, None);
@@ -481,7 +574,7 @@ mod tests {
     #[test]
     fn build_blocks_without_limits_reports_plan_message() {
         let usage = usage_from_json(r#"{"plan_type": "free"}"#);
-        let blocks = build_blocks(&usage, false);
+        let blocks = build_blocks(&usage, None, false);
 
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].title, None);
@@ -507,7 +600,7 @@ mod tests {
                 ]
             }"#,
         );
-        let blocks = build_blocks(&usage, false);
+        let blocks = build_blocks(&usage, None, false);
 
         assert_eq!(blocks.len(), 1);
         assert_eq!(
@@ -538,7 +631,7 @@ mod tests {
                 "credits": {"has_credits": true, "unlimited": true, "balance": "0"}
             }"#,
         );
-        let blocks = build_blocks(&usage, false);
+        let blocks = build_blocks(&usage, None, false);
         assert_eq!(blocks.len(), 2);
         match &blocks[1].rows[0] {
             crate::snapshot::Row::Text { text } => assert_eq!(text, "Credits: Unlimited"),
@@ -551,11 +644,126 @@ mod tests {
                 "credits": {"has_credits": true, "unlimited": false, "balance": "12.5"}
             }"#,
         );
-        let blocks = build_blocks(&usage, false);
+        let blocks = build_blocks(&usage, None, false);
         assert_eq!(blocks.len(), 2);
         match &blocks[1].rows[0] {
             crate::snapshot::Row::Text { text } => assert_eq!(text, "Credits: $12.50"),
             _ => panic!("expected text row"),
         }
+    }
+
+    fn details_from_json(json: &str) -> RateLimitResetCreditsDetails {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn text_row(row: &crate::snapshot::Row) -> &str {
+        match row {
+            crate::snapshot::Row::Text { text } => text,
+            _ => panic!("expected text row"),
+        }
+    }
+
+    #[test]
+    fn build_blocks_reset_credits_zero_shows_count() {
+        let usage = usage_from_json(
+            r#"{
+                "rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": null}},
+                "rate_limit_reset_credits": {"available_count": 0}
+            }"#,
+        );
+        let blocks = build_blocks(&usage, None, false);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[1].title.as_deref(), Some("Reset credits"));
+        assert_eq!(text_row(&blocks[1].rows[0]), "0 available");
+        assert_eq!(blocks[1].rows.len(), 1);
+    }
+
+    #[test]
+    fn build_blocks_reset_credits_omitted_without_summary_or_details() {
+        let usage = usage_from_json(
+            r#"{"rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": null}}}"#,
+        );
+        let blocks = build_blocks(&usage, None, false);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].title.as_deref(), Some("Current session (5h)"));
+    }
+
+    #[test]
+    fn build_blocks_reset_credits_lists_expiry_soonest_first() {
+        let usage = usage_from_json(
+            r#"{
+                "rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": null}},
+                "rate_limit_reset_credits": {"available_count": 2}
+            }"#,
+        );
+        let details = details_from_json(
+            r#"{
+                "available_count": 2,
+                "credits": [
+                    {
+                        "status": "available",
+                        "expires_at": "2030-06-01T00:00:00Z"
+                    },
+                    {
+                        "status": "redeemed",
+                        "expires_at": "2029-01-01T00:00:00Z"
+                    },
+                    {
+                        "status": "available",
+                        "expires_at": 1893456000
+                    }
+                ]
+            }"#,
+        );
+        let blocks = build_blocks(&usage, Some(&details), false);
+        let reset = blocks
+            .iter()
+            .find(|block| block.title.as_deref() == Some("Reset credits"))
+            .expect("reset credits block");
+        assert_eq!(text_row(&reset.rows[0]), "2 available");
+        assert_eq!(reset.rows.len(), 3);
+        assert_eq!(
+            text_row(&reset.rows[1]),
+            format_expiry_line(1893456000, false)
+        );
+        assert_eq!(
+            text_row(&reset.rows[2]),
+            format_expiry_line(1906502400, false)
+        );
+        assert!(text_row(&reset.rows[1]).starts_with("Expires "));
+        assert!(text_row(&reset.rows[1]).contains(" left"));
+        assert!(text_row(&reset.rows[2]).starts_with("Expires "));
+        assert!(text_row(&reset.rows[2]).contains(" left"));
+    }
+
+    #[test]
+    fn build_blocks_reset_credits_count_without_details() {
+        let usage = usage_from_json(
+            r#"{
+                "rate_limit": {"primary_window": {"used_percent": 1, "limit_window_seconds": 18000, "reset_at": null}},
+                "rate_limit_reset_credits": {"available_count": 2}
+            }"#,
+        );
+        let blocks = build_blocks(&usage, None, false);
+        let reset = &blocks[1];
+        assert_eq!(reset.title.as_deref(), Some("Reset credits"));
+        assert_eq!(text_row(&reset.rows[0]), "2 available");
+        assert_eq!(reset.rows.len(), 1);
+    }
+
+    #[test]
+    fn format_expiry_line_matches_reset_date_style() {
+        let ts = 1893456000;
+        let when = format_reset_from_unix_with_options(ts, false);
+        let line = format_expiry_line(ts, false);
+        assert_eq!(
+            line,
+            format!(
+                "Expires {when}, {} left",
+                time_remaining_from_unix(ts).unwrap()
+            )
+        );
+        assert!(!format_expiry_line(ts, false).contains('('));
+        assert!(format_expiry_line(ts, true).contains('('));
     }
 }

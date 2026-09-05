@@ -1148,7 +1148,7 @@ fn layout_block(block: &crate::snapshot::Block) -> BlockLayout<'_> {
 }
 
 fn compact_detail(detail: &str) -> String {
-    let rest = ["Refreshes ", "Resets: ", "Resets "]
+    let rest = ["Refreshes ", "Resets: ", "Resets ", "Expires "]
         .iter()
         .find_map(|prefix| detail.strip_prefix(prefix))
         .unwrap_or(detail);
@@ -1246,7 +1246,11 @@ fn block_layout_ui(ui: &mut Ui, palette: Palette, layout: &BlockLayout<'_>) {
         }
         match item {
             LayoutItem::Note(text) => {
-                ui.label(RichText::new(*text).size(SIZE_CAPTION).color(palette.faint));
+                ui.label(
+                    RichText::new(compact_detail(text))
+                        .size(SIZE_CAPTION)
+                        .color(palette.faint),
+                );
             }
             LayoutItem::Metric {
                 label,
@@ -1353,6 +1357,30 @@ mod tests {
         assert_eq!(
             compact_detail("Resets 2:10pm, 4h 9m left"),
             "2:10pm · 4h 9m left"
+        );
+        assert_eq!(
+            compact_detail("Expires Sep 12 at 8:32am, 7d left"),
+            "Sep 12 at 8:32am · 7d left"
+        );
+    }
+
+    #[test]
+    fn layout_block_keeps_title_for_note_only_reset_credits() {
+        let block = Block::titled(
+            "Reset credits",
+            vec![
+                Row::text("2 available"),
+                Row::text("Expires Sep 12 at 8:32am, 7d left"),
+            ],
+        );
+        let layout = layout_block(&block);
+        assert_eq!(layout.heading, Some("Reset credits"));
+        assert_eq!(
+            layout.items,
+            vec![
+                LayoutItem::Note("2 available"),
+                LayoutItem::Note("Expires Sep 12 at 8:32am, 7d left"),
+            ]
         );
     }
 

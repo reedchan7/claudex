@@ -1,4 +1,6 @@
+use chrono::DateTime;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 use super::auth::CodexCredentials;
@@ -9,6 +11,7 @@ pub struct UsageResponse {
     pub rate_limit: Option<RateLimitInfo>,
     pub additional_rate_limits: Option<Vec<AdditionalRateLimit>>,
     pub credits: Option<Credits>,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,16 +40,80 @@ pub struct Credits {
     pub balance: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RateLimitResetCreditsSummary {
+    pub available_count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RateLimitResetCreditsDetails {
+    pub available_count: i64,
+    #[serde(default)]
+    pub credits: Vec<RateLimitResetCredit>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RateLimitResetCredit {
+    pub id: Option<String>,
+    pub reset_type: Option<String>,
+    pub status: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_timestamp")]
+    pub granted_at: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_opt_timestamp")]
+    pub expires_at: Option<i64>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+impl RateLimitResetCredit {
+    pub fn is_available(&self) -> bool {
+        match self.status.as_deref() {
+            None => true,
+            Some(status) => status.eq_ignore_ascii_case("available"),
+        }
+    }
+}
+
 const BASE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 pub async fn fetch_usage(creds: &CodexCredentials) -> Result<UsageResponse, String> {
-    let client = reqwest::Client::builder()
+    let client = http_client()?;
+    chatgpt_get_json(&client, creds, BASE_URL, "Codex usage data").await
+}
+
+pub async fn fetch_reset_credits(
+    creds: &CodexCredentials,
+) -> Result<RateLimitResetCreditsDetails, String> {
+    let client = http_client()?;
+    chatgpt_get_json(&client, creds, RESET_CREDITS_URL, "Codex reset credits").await
+}
+
+pub async fn fetch_usage_bundle(
+    creds: &CodexCredentials,
+) -> Result<(UsageResponse, Option<RateLimitResetCreditsDetails>), String> {
+    let client = http_client()?;
+    let usage = chatgpt_get_json(&client, creds, BASE_URL, "Codex usage data");
+    let details = chatgpt_get_json(&client, creds, RESET_CREDITS_URL, "Codex reset credits");
+    let (usage, details) = tokio::join!(usage, details);
+    Ok((usage?, details.ok()))
+}
+
+fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
-        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+        .map_err(|e| format!("failed to build HTTP client: {e}"))
+}
 
+async fn chatgpt_get_json<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    creds: &CodexCredentials,
+    url: &str,
+    what: &str,
+) -> Result<T, String> {
     let mut req = client
-        .get(BASE_URL)
+        .get(url)
         .header("Authorization", format!("Bearer {}", creds.access_token))
         .header("User-Agent", "codex-cli");
 
@@ -57,7 +124,7 @@ pub async fn fetch_usage(creds: &CodexCredentials) -> Result<UsageResponse, Stri
     let response = req
         .send()
         .await
-        .map_err(|e| format!("failed to fetch Codex usage data: {e}"))?;
+        .map_err(|e| format!("failed to fetch {what}: {e}"))?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err(
@@ -67,15 +134,45 @@ pub async fn fetch_usage(creds: &CodexCredentials) -> Result<UsageResponse, Stri
 
     if !response.status().is_success() {
         return Err(format!(
-            "failed to fetch Codex usage data: HTTP {}",
+            "failed to fetch {what}: HTTP {}",
             response.status()
         ));
     }
 
     response
-        .json::<UsageResponse>()
+        .json::<T>()
         .await
-        .map_err(|e| format!("failed to parse Codex usage data: {e}"))
+        .map_err(|e| format!("failed to parse {what}: {e}"))
+}
+
+fn deserialize_opt_timestamp<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| parse_timestamp(&value)))
+}
+
+fn parse_timestamp(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f.round() as i64)),
+        serde_json::Value::String(s) => parse_timestamp_str(s),
+        _ => None,
+    }
+}
+
+fn parse_timestamp_str(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(n) = raw.parse::<i64>() {
+        return Some(n);
+    }
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.timestamp())
 }
 
 #[cfg(test)]
@@ -196,5 +293,57 @@ mod tests {
                 .used_percent,
             50.0
         );
+        assert_eq!(
+            resp.rate_limit_reset_credits
+                .as_ref()
+                .unwrap()
+                .available_count,
+            0
+        );
+    }
+
+    #[test]
+    fn test_deserialize_reset_credit_details_iso_and_unix() {
+        let json = r#"{
+            "available_count": 2,
+            "total_earned_count": 2,
+            "history_enabled": false,
+            "immediate_reset_purchase_eligible": false,
+            "credits": [
+                {
+                    "id": "RateLimitResetCredit_aaa",
+                    "reset_type": "codex_rate_limits",
+                    "status": "available",
+                    "granted_at": "2026-06-12T01:33:14Z",
+                    "expires_at": "2030-01-01T00:00:00Z",
+                    "title": "Full reset (Weekly + 5 hr)",
+                    "description": "One free rate limit reset"
+                },
+                {
+                    "id": "RateLimitResetCredit_bbb",
+                    "status": "available",
+                    "granted_at": 1780210528,
+                    "expires_at": 1893456000
+                }
+            ]
+        }"#;
+        let details: RateLimitResetCreditsDetails = serde_json::from_str(json).unwrap();
+        assert_eq!(details.available_count, 2);
+        assert_eq!(details.credits.len(), 2);
+        assert_eq!(details.credits[0].expires_at, Some(1893456000));
+        assert_eq!(details.credits[1].expires_at, Some(1893456000));
+        assert!(details.credits[0].is_available());
+    }
+
+    #[test]
+    fn test_reset_credit_status_filter() {
+        let redeemed: RateLimitResetCredit =
+            serde_json::from_str(r#"{"status": "redeemed", "expires_at": "2030-01-01T00:00:00Z"}"#)
+                .unwrap();
+        assert!(!redeemed.is_available());
+
+        let missing: RateLimitResetCredit = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(missing.is_available());
+        assert!(missing.expires_at.is_none());
     }
 }
