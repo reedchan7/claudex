@@ -8,7 +8,7 @@ use std::thread;
 const AUTO_CONFIRM_INPUT: &[u8] = b"yes\nyes\nyes\nyes\nyes\n";
 
 /// Agents available by name but omitted from a no-args `update`.
-const OPT_IN_ONLY: &[&str] = &["reasonix"];
+const OPT_IN_ONLY: &[&str] = &["reasonix", "grok"];
 
 /// All supported coding agents and their update metadata.
 const AGENTS: &[Agent] = &[
@@ -787,15 +787,22 @@ mod tests {
 
     #[test]
     fn select_agents_default_set_excludes_reasonix() {
-        // A bare `claudex update` must not touch Reasonix; it is opt-in by name.
+        // A bare `claudex update` must not touch Reasonix or Grok; they are opt-in by name.
         let selected = select_agents(&[], &[]).unwrap();
         assert!(!selected.iter().any(|a| a.name == "reasonix"));
+        assert!(!selected.iter().any(|a| a.name == "grok"));
         assert!(selected.iter().any(|a| a.name == "claude"));
         assert!(selected.iter().any(|a| a.name == "codex"));
         assert!(selected.iter().any(|a| a.name == "agy"));
         assert!(selected.iter().any(|a| a.name == "kimi"));
         assert!(selected.iter().any(|a| a.name == "pi"));
-        assert!(selected.iter().any(|a| a.name == "grok"));
+    }
+
+    #[test]
+    fn select_agents_explicit_grok_is_still_available() {
+        let selected = select_agents(&["grok".into()], &[]).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "grok");
     }
 
     #[test]

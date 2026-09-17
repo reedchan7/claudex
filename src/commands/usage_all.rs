@@ -10,7 +10,7 @@ const PROVIDER_ORDER: &[Provider] = &[
     Provider::Antigravity,
     Provider::Glm,
     Provider::Kimi,
-    Provider::Grok,
+    // Provider::Grok,
 ];
 
 // Widest possible progress-bar line suffix: " 100% used".
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_order_places_grok_last() {
+    fn provider_order_excludes_grok() {
         assert_eq!(
             PROVIDER_ORDER.iter().map(|p| p.label()).collect::<Vec<_>>(),
             [
@@ -200,7 +200,6 @@ mod tests {
                 "Gemini / Antigravity",
                 "GLM / Z.ai",
                 "Kimi Code",
-                "Grok Build",
             ]
         );
     }
