@@ -8,7 +8,7 @@ use std::thread;
 const AUTO_CONFIRM_INPUT: &[u8] = b"yes\nyes\nyes\nyes\nyes\n";
 
 /// Agents available by name but omitted from a no-args `update`.
-const OPT_IN_ONLY: &[&str] = &["reasonix", "grok"];
+const OPT_IN_ONLY: &[&str] = &[];
 
 /// All supported coding agents and their update metadata.
 const AGENTS: &[Agent] = &[
@@ -55,19 +55,21 @@ const AGENTS: &[Agent] = &[
             "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
         ],
     },
-    Agent {
-        name: "reasonix",
-        display: "Reasonix",
-        version_cmd: &["reasonix", "--version"],
-        latest_cmd: LatestCmd::Npm("reasonix"),
-        update_cmd: &[
-            "pnpm",
-            "add",
-            "-g",
-            "reasonix@latest",
-            "--config.minimum-release-age=0",
-        ],
-    },
+    // Reasonix is temporarily blocked; restore by uncommenting this entry
+    // and re-adding "reasonix" to OPT_IN_ONLY.
+    // Agent {
+    //     name: "reasonix",
+    //     display: "Reasonix",
+    //     version_cmd: &["reasonix", "--version"],
+    //     latest_cmd: LatestCmd::Npm("reasonix"),
+    //     update_cmd: &[
+    //         "pnpm",
+    //         "add",
+    //         "-g",
+    //         "reasonix@latest",
+    //         "--config.minimum-release-age=0",
+    //     ],
+    // },
     Agent {
         name: "pi",
         display: "Pi",
@@ -75,17 +77,20 @@ const AGENTS: &[Agent] = &[
         latest_cmd: LatestCmd::Npm("@earendil-works/pi-coding-agent"),
         update_cmd: &["pi", "update"],
     },
-    Agent {
-        name: "grok",
-        display: "Grok Build",
-        version_cmd: &["grok", "--version"],
-        latest_cmd: LatestCmd::JsonField {
-            program: "grok",
-            args: &["update", "--check", "--json"],
-            field: "latestVersion",
-        },
-        update_cmd: &["grok", "update"],
-    },
+    // Grok is temporarily blocked; restore by uncommenting this entry, the
+    // LatestCmd::JsonField variant, parse_json_version_field, the grok alias
+    // in resolve_agent_name, and re-adding "grok" to OPT_IN_ONLY.
+    // Agent {
+    //     name: "grok",
+    //     display: "Grok Build",
+    //     version_cmd: &["grok", "--version"],
+    //     latest_cmd: LatestCmd::JsonField {
+    //         program: "grok",
+    //         args: &["update", "--check", "--json"],
+    //         field: "latestVersion",
+    //     },
+    //     update_cmd: &["grok", "update"],
+    // },
 ];
 
 struct Agent {
@@ -106,12 +111,12 @@ enum LatestCmd {
     Npm(&'static str),
     /// PyPI lookup via `pip index versions <pkg>`.
     Pip(&'static str),
-    /// Run a command and read a version field from its JSON stdout.
-    JsonField {
-        program: &'static str,
-        args: &'static [&'static str],
-        field: &'static str,
-    },
+    // /// Run a command and read a version field from its JSON stdout.
+    // JsonField {
+    //     program: &'static str,
+    //     args: &'static [&'static str],
+    //     field: &'static str,
+    // },
 }
 
 /// Run a command and return trimmed stdout, or None on failure.
@@ -191,24 +196,24 @@ fn get_latest_version(agent: &Agent) -> Option<String> {
                 )?;
                 parse_pypi_version(&raw)
             })
-        }
-        LatestCmd::JsonField {
-            program,
-            args,
-            field,
-        } => run_quiet(program, args).and_then(|raw| parse_json_version_field(&raw, field)),
+        } // JsonField arm for Grok is disabled while Grok is blocked.
+          // LatestCmd::JsonField {
+          //     program,
+          //     args,
+          //     field,
+          // } => run_quiet(program, args).and_then(|raw| parse_json_version_field(&raw, field)),
     }
 }
 
-/// Extract a version string from a JSON object field (e.g. `"latestVersion":"0.2.93"`).
-fn parse_json_version_field(json: &str, field: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(json).ok()?;
-    let raw = value.get(field)?.as_str()?;
-    extract_version(raw).or_else(|| {
-        let trimmed = raw.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
+// Extract a version string from a JSON object field (e.g. `"latestVersion":"0.2.93"`).
+// fn parse_json_version_field(json: &str, field: &str) -> Option<String> {
+//     let value: serde_json::Value = serde_json::from_str(json).ok()?;
+//     let raw = value.get(field)?.as_str()?;
+//     extract_version(raw).or_else(|| {
+//         let trimmed = raw.trim();
+//         (!trimmed.is_empty()).then(|| trimmed.to_string())
+//     })
+// }
 
 /// Minimal JSON extraction of `"version"` from PyPI JSON response.
 fn parse_pypi_version(json: &str) -> Option<String> {
@@ -561,7 +566,7 @@ fn for_each_bounded_ordered<T, R>(
 fn resolve_agent_name(name: &str) -> Option<&'static Agent> {
     let lower = name.to_ascii_lowercase();
     let canonical = match lower.as_str() {
-        "grok-build" | "grokbuild" => "grok",
+        // "grok-build" | "grokbuild" => "grok", // disabled while Grok is blocked
         "antigravity" | "gemini" => "agy",
         "gpt" => "codex",
         other => other,
@@ -734,18 +739,16 @@ mod tests {
 
     #[test]
     fn pnpm_global_agents_bypass_minimum_release_age() {
-        for name in ["codex", "reasonix"] {
-            let agent = AGENTS.iter().find(|a| a.name == name).unwrap();
-            assert_eq!(agent.update_cmd[0], "pnpm");
-            assert!(
-                agent.update_cmd.contains(&"--config.minimum-release-age=0"),
-                "{name} update_cmd should bypass pnpm minimum-release-age"
-            );
-            assert!(
-                agent.update_cmd.iter().any(|arg| arg.ends_with("@latest")),
-                "{name} update_cmd should pin @latest"
-            );
-        }
+        let agent = AGENTS.iter().find(|a| a.name == "codex").unwrap();
+        assert_eq!(agent.update_cmd[0], "pnpm");
+        assert!(
+            agent.update_cmd.contains(&"--config.minimum-release-age=0"),
+            "codex update_cmd should bypass pnpm minimum-release-age"
+        );
+        assert!(
+            agent.update_cmd.iter().any(|arg| arg.ends_with("@latest")),
+            "codex update_cmd should pin @latest"
+        );
     }
 
     #[test]
@@ -760,71 +763,66 @@ mod tests {
         assert_eq!(pi.update_cmd, &["pi", "update"]);
     }
 
-    #[test]
-    fn grok_uses_self_update_metadata() {
-        let grok = AGENTS.iter().find(|a| a.name == "grok").unwrap();
-        assert_eq!(grok.display, "Grok Build");
-        assert_eq!(grok.version_cmd, &["grok", "--version"]);
-        assert!(matches!(
-            grok.latest_cmd,
-            LatestCmd::JsonField {
-                program: "grok",
-                field: "latestVersion",
-                ..
-            }
-        ));
-        assert_eq!(grok.update_cmd, &["grok", "update"]);
-    }
+    // Grok metadata test is disabled while Grok is blocked.
+    // #[test]
+    // fn grok_uses_self_update_metadata() {
+    //     let grok = AGENTS.iter().find(|a| a.name == "grok").unwrap();
+    //     assert_eq!(grok.display, "Grok Build");
+    //     assert_eq!(grok.version_cmd, &["grok", "--version"]);
+    //     assert!(matches!(
+    //         grok.latest_cmd,
+    //         LatestCmd::JsonField {
+    //             program: "grok",
+    //             field: "latestVersion",
+    //             ..
+    //         }
+    //     ));
+    //     assert_eq!(grok.update_cmd, &["grok", "update"]);
+    // }
+
+    // parse_json_version_field test is disabled while Grok is blocked.
+    // #[test]
+    // fn parse_json_version_field_reads_latest() {
+    //     let json = r#"{"currentVersion":"0.2.90","latestVersion":"0.2.93","updateAvailable":true}"#;
+    //     assert_eq!(
+    //         parse_json_version_field(json, "latestVersion").as_deref(),
+    //         Some("0.2.93")
+    //     );
+    // }
 
     #[test]
-    fn parse_json_version_field_reads_latest() {
-        let json = r#"{"currentVersion":"0.2.90","latestVersion":"0.2.93","updateAvailable":true}"#;
-        assert_eq!(
-            parse_json_version_field(json, "latestVersion").as_deref(),
-            Some("0.2.93")
-        );
-    }
-
-    #[test]
-    fn select_agents_default_set_excludes_reasonix() {
-        // A bare `claudex update` must not touch Reasonix or Grok; they are opt-in by name.
+    fn select_agents_default_set_excludes_blocked_agents() {
+        // A bare `claudex update` must only touch the five supported agents;
+        // Reasonix and Grok are blocked entirely for now.
         let selected = select_agents(&[], &[]).unwrap();
-        assert!(!selected.iter().any(|a| a.name == "reasonix"));
-        assert!(!selected.iter().any(|a| a.name == "grok"));
-        assert!(selected.iter().any(|a| a.name == "claude"));
-        assert!(selected.iter().any(|a| a.name == "codex"));
-        assert!(selected.iter().any(|a| a.name == "agy"));
-        assert!(selected.iter().any(|a| a.name == "kimi"));
-        assert!(selected.iter().any(|a| a.name == "pi"));
+        let names: Vec<_> = selected.iter().map(|a| a.name).collect();
+        assert_eq!(names, ["claude", "codex", "agy", "kimi", "pi"]);
     }
 
     #[test]
-    fn select_agents_explicit_grok_is_still_available() {
-        let selected = select_agents(&["grok".into()], &[]).unwrap();
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].name, "grok");
+    fn select_agents_explicit_grok_is_blocked() {
+        // Grok is blocked for now: even an explicit name must be rejected.
+        let Err(err) = select_agents(&["grok".into()], &[]) else {
+            panic!("expected grok to be rejected");
+        };
+        assert!(err.contains("unknown agent 'grok'"), "{err}");
     }
 
     #[test]
-    fn select_agents_explicit_reasonix_is_still_available() {
-        let selected = select_agents(&["reasonix".into()], &[]).unwrap();
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].name, "reasonix");
+    fn select_agents_explicit_reasonix_is_blocked() {
+        // Reasonix is blocked for now: even an explicit name must be rejected.
+        let Err(err) = select_agents(&["reasonix".into()], &[]) else {
+            panic!("expected reasonix to be rejected");
+        };
+        assert!(err.contains("unknown agent 'reasonix'"), "{err}");
     }
 
     #[test]
     fn select_agents_applies_skip() {
-        let selected = select_agents(&[], &["reasonix".into(), "pi".into()]).unwrap();
-        assert!(!selected.iter().any(|a| a.name == "reasonix"));
+        let selected = select_agents(&[], &["kimi".into(), "pi".into()]).unwrap();
+        assert!(!selected.iter().any(|a| a.name == "kimi"));
         assert!(!selected.iter().any(|a| a.name == "pi"));
         assert!(selected.iter().any(|a| a.name == "claude"));
-    }
-
-    #[test]
-    fn select_agents_accepts_grok_alias() {
-        let selected = select_agents(&["grok-build".into()], &[]).unwrap();
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].name, "grok");
     }
 
     #[test]

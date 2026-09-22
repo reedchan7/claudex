@@ -55,7 +55,7 @@ enum Commands {
         #[command(subcommand)]
         command: GrokCommands,
     },
-    /// Update coding agents concurrently (claude, codex, agy, kimi, pi, grok; reasonix is opt-in)
+    /// Update coding agents concurrently (claude, codex, agy, kimi, pi)
     #[command(alias = "up")]
     Update {
         /// Only run update commands; skip the post-update version check.
@@ -70,7 +70,7 @@ enum Commands {
         /// Update agents one at a time
         #[arg(long, conflicts_with = "jobs")]
         serial: bool,
-        /// Specific agent(s) to update. If omitted, updates the default set (Reasonix is opt-in).
+        /// Specific agent(s) to update. If omitted, updates the default set.
         agents: Vec<String>,
     },
     /// Update claudex itself to the latest release
