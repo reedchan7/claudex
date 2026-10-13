@@ -75,7 +75,7 @@ const AGENTS: &[Agent] = &[
         display: "Pi",
         version_cmd: &["pi", "--version"],
         latest_cmd: LatestCmd::Npm("@earendil-works/pi-coding-agent"),
-        update_cmd: &["pi", "update"],
+        update_cmd: &["sh", "-c", "pi update && pi update --extensions"],
     },
     // Grok is temporarily blocked; restore by uncommenting this entry, the
     // LatestCmd::JsonField variant, parse_json_version_field, the grok alias
@@ -760,7 +760,10 @@ mod tests {
             pi.latest_cmd,
             LatestCmd::Npm("@earendil-works/pi-coding-agent")
         ));
-        assert_eq!(pi.update_cmd, &["pi", "update"]);
+        assert_eq!(
+            pi.update_cmd,
+            &["sh", "-c", "pi update && pi update --extensions"]
+        );
     }
 
     // Grok metadata test is disabled while Grok is blocked.

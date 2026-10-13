@@ -223,9 +223,9 @@ No credentials needed. claudex checks each agent's installed version (via `<agen
 | codex | npm `@openai/codex` | `pnpm add -g @openai/codex@latest --config.minimum-release-age=0` |
 | agy | PyPI `antigravity-cli` | `agy update` |
 | kimi | npm `@moonshot-ai/kimi-code` | official install script (`curl …/install.sh \| bash`) |
-| pi | npm `@earendil-works/pi-coding-agent` | `pi update` |
+| pi | npm `@earendil-works/pi-coding-agent` | `pi update && pi update --extensions` |
 
-pnpm 11 defaults `minimum-release-age` to 24 hours, so a package published today can show up in `pnpm view … version` (and in claudex's "latest" check) while `pnpm add -g` still refuses it. claudex bypasses that gate for intentional upgrades. Kimi native installs often reject `kimi upgrade`, so claudex re-runs the official installer instead.
+pnpm 11 defaults `minimum-release-age` to 24 hours, so a package published today can show up in `pnpm view … version` (and in claudex's "latest" check) while `pnpm add -g` still refuses it. claudex bypasses that gate for intentional upgrades. Kimi native installs often reject `kimi upgrade`, so claudex re-runs the official installer instead. Pi skips installed extensions during `pi update` by default, so claudex chains `pi update --extensions` alongside it.
 
 Agents that aren't installed are silently skipped. A no-args run updates the default set (Claude, Codex, Antigravity, Kimi Code, Pi). Pass one or more agent names to update only those, or `--skip <agent>...` (repeatable / comma-separated) to exclude agents from the default set.
 
